@@ -383,11 +383,11 @@ def _step2_llm_providers() -> dict:
         "and a generation model for analysis."
     )
 
-    # --- OpenAI API Key (always required) ---
+    # --- OpenAI API Key ---
     click.echo("\n--- OpenAI API Key ---")
     openai_key = _prompt_api_key("OpenAI", validate_openai_key)
     if not openai_key:
-        click.echo("OpenAI API key is required for embeddings.")
+        click.echo("OpenAI API key is required.")
         return {
             "openai_key": None,
             "anthropic_key": None,
@@ -397,70 +397,29 @@ def _step2_llm_providers() -> dict:
         }
 
     # --- Generation Model ---
-    click.echo("\n--- Generation Model ---")
-    click.echo("You can use OpenAI or Anthropic (Claude) for text generation.")
-    has_anthropic = click.confirm("Do you have an Anthropic API key?", default=False)
+    click.echo("\nAvailable generation models:")
+    models = OPENAI_GENERATION_MODELS
+    for i, (name, desc) in enumerate(models, 1):
+        click.echo(f"  [{i}] {name} ({desc})")
+    other_idx = len(models) + 1
+    click.echo(f"  [{other_idx}] Other (enter model name)")
 
-    anthropic_key = None
-    generation_provider = "openai"
-    generation_model = "gpt-4.1"
+    valid_choices = [str(i) for i in range(1, other_idx + 1)]
+    choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
+    choice_int = int(choice)
 
-    if has_anthropic:
-        click.echo("")
-        anthropic_key = _prompt_api_key("Anthropic (Claude)", validate_anthropic_key)
-
-    if anthropic_key:
-        generation_provider = "anthropic"
-        click.echo("\nUsing Anthropic for generation. Available models:")
-        models = ANTHROPIC_GENERATION_MODELS
-        for i, (name, desc) in enumerate(models, 1):
-            click.echo(f"  [{i}] {name} ({desc})")
-        other_idx = len(models) + 1
-        click.echo(f"  [{other_idx}] Other (enter model name)")
-
-        valid_choices = [str(i) for i in range(1, other_idx + 1)]
-        choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
-        choice_int = int(choice)
-
-        if choice_int <= len(models):
-            generation_model = models[choice_int - 1][0]
-        else:
-            generation_model = click.prompt("Enter model name")
-
-        # Validate the chosen generation model
-        click.echo(f"Validating {generation_model}... ", nl=False)
-        ok, msg = validate_anthropic_generation(anthropic_key, generation_model)
-        if ok:
-            click.echo(f"  {msg}")
-        else:
-            click.echo(f"  {msg}")
-            click.echo("Continuing with selected model anyway.")
+    if choice_int <= len(models):
+        generation_model = models[choice_int - 1][0]
     else:
-        generation_provider = "openai"
-        click.echo("\nUsing OpenAI for generation. Available models:")
-        models = OPENAI_GENERATION_MODELS
-        for i, (name, desc) in enumerate(models, 1):
-            click.echo(f"  [{i}] {name} ({desc})")
-        other_idx = len(models) + 1
-        click.echo(f"  [{other_idx}] Other (enter model name)")
+        generation_model = click.prompt("Enter model name")
 
-        valid_choices = [str(i) for i in range(1, other_idx + 1)]
-        choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
-        choice_int = int(choice)
-
-        if choice_int <= len(models):
-            generation_model = models[choice_int - 1][0]
-        else:
-            generation_model = click.prompt("Enter model name")
-
-        # Validate the chosen generation model
-        click.echo(f"Validating {generation_model}... ", nl=False)
-        ok, msg = validate_openai_generation(openai_key, generation_model)
-        if ok:
-            click.echo(f"  {msg}")
-        else:
-            click.echo(f"  {msg}")
-            click.echo("Continuing with selected model anyway.")
+    click.echo(f"Validating {generation_model}... ", nl=False)
+    ok, msg = validate_openai_generation(openai_key, generation_model)
+    if ok:
+        click.echo(f"  {msg}")
+    else:
+        click.echo(f"  {msg}")
+        click.echo("Continuing with selected model anyway.")
 
     # --- Embedding Model ---
     click.echo("\n--- Embedding Model ---")
@@ -483,8 +442,8 @@ def _step2_llm_providers() -> dict:
 
     return {
         "openai_key": openai_key,
-        "anthropic_key": anthropic_key,
-        "generation_provider": generation_provider,
+        "anthropic_key": None,
+        "generation_provider": "openai",
         "generation_model": generation_model,
         "embedding_model": embedding_model,
     }
