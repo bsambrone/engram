@@ -1,0 +1,58 @@
+[project]
+name = "engram"
+version = "0.1.0"
+description = "A self-hosted digital engram platform"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pgvector>=0.3",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "anthropic>=0.49",
+    "openai>=1.65",
+    "redis>=5.2",
+    "rq>=2.1",
+    "cryptography>=44.0",
+    "click>=8.1",
+    "python-multipart>=0.0.18",
+    "httpx>=0.28",
+    "beautifulsoup4>=4.12",
+    "tiktoken>=0.8",
+    "mcp>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-httpx>=0.35",
+    "ruff>=0.9",
+    "aiosqlite>=0.20",
+]
+gmail = ["google-auth-oauthlib>=1.2", "google-api-python-client>=2.160"]
+reddit = ["praw>=7.8"]
+
+[project.scripts]
+engram = "engram.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engram"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
