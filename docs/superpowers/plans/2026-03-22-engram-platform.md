@@ -28,18 +28,20 @@ engram/
 │   │   ├── base.py                      # Declarative base, common mixins (id, timestamps)
 │   │   ├── memory.py                    # Memory, Topic, MemoryTopic, Person, MemoryPerson
 │   │   ├── identity.py                  # IdentityProfile, Belief, BeliefMemory, Preference, PreferenceMemory, StyleProfile, IdentitySnapshot
-│   │   ├── connector.py                 # ConnectorConfig, IngestionJob
+│   │   ├── connector.py                 # DataExport, IngestionJob
 │   │   ├── auth.py                      # AccessToken
 │   │   └── photo.py                     # Photo, PhotoPerson
 │   ├── ingestion/
 │   │   ├── __init__.py
-│   │   ├── service.py                   # Orchestrates connector → pipeline, manages jobs
-│   │   └── connectors/
+│   │   ├── service.py                   # Orchestrates parser → pipeline, manages jobs
+│   │   └── parsers/
 │   │       ├── __init__.py
-│   │       ├── base.py                  # Connector Protocol, RawDocument dataclass
-│   │       ├── file.py                  # FileConnector
-│   │       ├── gmail.py                 # GmailConnector
-│   │       └── reddit.py               # RedditConnector
+│   │       ├── base.py                  # ExportParser Protocol, RawDocument dataclass
+│   │       ├── file.py                  # FileParser
+│   │       ├── gmail.py                 # GmailExportParser (MBOX)
+│   │       ├── reddit.py               # RedditExportParser (JSON archive)
+│   │       ├── facebook.py             # FacebookExportParser (JSON archive)
+│   │       └── instagram.py            # InstagramExportParser (JSON archive)
 │   ├── processing/
 │   │   ├── __init__.py
 │   │   ├── pipeline.py                  # Run all stages sequentially
@@ -70,7 +72,6 @@ engram/
 │   │   └── routes/
 │   │       ├── __init__.py            # Router that includes all sub-routers
 │   │       ├── ingest.py             # POST /api/ingest/*, GET /api/ingest/status
-│   │       ├── connectors.py         # /api/connectors/*
 │   │       ├── memories.py           # /api/memories/*
 │   │       ├── sources.py            # /api/sources/*
 │   │       ├── identity.py           # /api/identity/*
@@ -86,9 +87,11 @@ engram/
 │   ├── test_models/
 │   │   └── test_models.py
 │   ├── test_ingestion/
-│   │   ├── test_file_connector.py
-│   │   ├── test_gmail_connector.py
-│   │   └── test_reddit_connector.py
+│   │   ├── test_file_parser.py
+│   │   ├── test_gmail_parser.py
+│   │   ├── test_reddit_parser.py
+│   │   ├── test_facebook_parser.py
+│   │   └── test_instagram_parser.py
 │   ├── test_processing/
 │   │   ├── test_normalizer.py
 │   │   ├── test_chunker.py
@@ -109,7 +112,6 @@ engram/
 │   │   └── test_repository.py
 │   ├── test_api/
 │   │   ├── test_ingest.py
-│   │   ├── test_connectors.py
 │   │   ├── test_memories.py
 │   │   ├── test_sources.py
 │   │   ├── test_identity.py
@@ -190,8 +192,6 @@ dev = [
     "ruff>=0.9",
     "aiosqlite>=0.20",
 ]
-gmail = ["google-auth-oauthlib>=1.2", "google-api-python-client>=2.160"]
-reddit = ["praw>=7.8"]
 
 [project.scripts]
 engram = "engram.cli:cli"
@@ -820,7 +820,7 @@ class IdentitySnapshot(UUIDMixin, Base):
     )
 ```
 
-- [ ] **Step 4: Create connector + ingestion job models**
+- [ ] **Step 4: Create data export + ingestion job models**
 
 `src/engram/models/connector.py`:
 ```python
@@ -834,18 +834,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 from engram.models.base import Base, TimestampMixin, UUIDMixin
 
 
-class ConnectorConfig(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "connector_configs"
+class DataExport(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "data_exports"
 
-    connector_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    credentials: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet-encrypted JSON
-    status: Mapped[str] = mapped_column(String(20), default="active")
+    platform: Mapped[str] = mapped_column(String(50), nullable=False)  # gmail, reddit, facebook, instagram
+    export_path: Mapped[str] = mapped_column(Text, nullable=False)  # path to export directory
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, ingested, failed
 
 
 class IngestionJob(UUIDMixin, Base):
     __tablename__ = "ingestion_jobs"
 
-    connector_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)  # file, gmail, reddit, facebook, instagram
     status: Mapped[str] = mapped_column(String(20), default="pending")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -942,7 +942,7 @@ from engram.models.identity import (
     PreferenceMemory,
     StyleProfile,
 )
-from engram.models.connector import ConnectorConfig, IngestionJob
+from engram.models.connector import DataExport, IngestionJob
 from engram.models.auth import AccessToken
 from engram.models.photo import Photo, PhotoPerson
 
@@ -951,7 +951,7 @@ __all__ = [
     "Memory", "Topic", "MemoryTopic", "Person", "MemoryPerson",
     "IdentityProfile", "Belief", "BeliefMemory", "Preference", "PreferenceMemory",
     "StyleProfile", "IdentitySnapshot",
-    "ConnectorConfig", "IngestionJob",
+    "DataExport", "IngestionJob",
     "AccessToken",
     "Photo", "PhotoPerson",
 ]
@@ -1071,7 +1071,7 @@ import uuid
 
 from engram.models.memory import Memory, Person, Topic
 from engram.models.identity import IdentityProfile, Belief, Preference, StyleProfile
-from engram.models.connector import ConnectorConfig, IngestionJob
+from engram.models.connector import DataExport, IngestionJob
 from engram.models.auth import AccessToken
 from engram.models.photo import Photo
 
@@ -1520,37 +1520,36 @@ git commit -m "feat: config API with redacted key display and key update"
 
 ---
 
-## Task 5: File Ingestion Connector + Job Queue
+## Task 5: File Ingestion Parser + Job Queue
 
 **Files:**
 - Create: `src/engram/ingestion/__init__.py`
-- Create: `src/engram/ingestion/connectors/__init__.py`
-- Create: `src/engram/ingestion/connectors/base.py`
-- Create: `src/engram/ingestion/connectors/file.py`
+- Create: `src/engram/ingestion/parsers/__init__.py`
+- Create: `src/engram/ingestion/parsers/base.py`
+- Create: `src/engram/ingestion/parsers/file.py`
 - Create: `src/engram/ingestion/service.py`
 - Create: `src/engram/api/routes/ingest.py`
-- Create: `src/engram/api/routes/connectors.py`
-- Create: `tests/test_ingestion/test_file_connector.py`
+- Create: `tests/test_ingestion/test_file_parser.py`
 - Create: `tests/test_api/test_ingest.py`
 
-- [ ] **Step 1: Write failing connector test**
+- [ ] **Step 1: Write failing parser test**
 
-`tests/test_ingestion/test_file_connector.py`:
+`tests/test_ingestion/test_file_parser.py`:
 ```python
 import tempfile
 import os
 from pathlib import Path
 
-from engram.ingestion.connectors.base import RawDocument
-from engram.ingestion.connectors.file import FileConnector
+from engram.ingestion.parsers.base import RawDocument
+from engram.ingestion.parsers.file import FileParser
 
 
-async def test_file_connector_reads_txt():
+async def test_file_parser_reads_txt():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         f.write("I believe in open source software.")
         f.flush()
-        connector = FileConnector()
-        docs = await connector.fetch({"file_paths": [f.name]})
+        parser = FileParser()
+        docs = await parser.parse({"file_paths": [f.name]})
 
     assert len(docs) == 1
     assert docs[0].content == "I believe in open source software."
@@ -1559,23 +1558,23 @@ async def test_file_connector_reads_txt():
     os.unlink(f.name)
 
 
-async def test_file_connector_reads_json():
+async def test_file_parser_reads_json():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         f.write('{"entries": [{"text": "Note 1"}, {"text": "Note 2"}]}')
         f.flush()
-        connector = FileConnector()
-        docs = await connector.fetch({"file_paths": [f.name]})
+        parser = FileParser()
+        docs = await parser.parse({"file_paths": [f.name]})
 
     assert len(docs) >= 1
     os.unlink(f.name)
 
 
-async def test_file_connector_reads_md():
+async def test_file_parser_reads_md():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write("# My Thoughts\n\nI think AI is transformative.")
         f.flush()
-        connector = FileConnector()
-        docs = await connector.fetch({"file_paths": [f.name]})
+        parser = FileParser()
+        docs = await parser.parse({"file_paths": [f.name]})
 
     assert len(docs) == 1
     assert "AI is transformative" in docs[0].content
@@ -1584,15 +1583,15 @@ async def test_file_connector_reads_md():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_ingestion/test_file_connector.py -v`
+Run: `uv run pytest tests/test_ingestion/test_file_parser.py -v`
 Expected: FAIL — modules don't exist.
 
-- [ ] **Step 3: Implement connector base**
+- [ ] **Step 3: Implement parser base**
 
 `src/engram/ingestion/__init__.py`: empty.
-`src/engram/ingestion/connectors/__init__.py`: empty.
+`src/engram/ingestion/parsers/__init__.py`: empty.
 
-`src/engram/ingestion/connectors/base.py`:
+`src/engram/ingestion/parsers/base.py`:
 ```python
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -1610,27 +1609,23 @@ class RawDocument:
 
 
 @runtime_checkable
-class Connector(Protocol):
-    async def configure(self, credentials: dict) -> None: ...
-    async def fetch(self, options: dict) -> list[RawDocument]: ...
+class ExportParser(Protocol):
+    async def parse(self, options: dict) -> list[RawDocument]: ...
 ```
 
-- [ ] **Step 4: Implement file connector**
+- [ ] **Step 4: Implement file parser**
 
-`src/engram/ingestion/connectors/file.py`:
+`src/engram/ingestion/parsers/file.py`:
 ```python
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from engram.ingestion.connectors.base import Connector, RawDocument
+from engram.ingestion.parsers.base import ExportParser, RawDocument
 
 
-class FileConnector:
-    async def configure(self, credentials: dict) -> None:
-        pass  # No credentials needed for file upload
-
-    async def fetch(self, options: dict) -> list[RawDocument]:
+class FileParser:
+    async def parse(self, options: dict) -> list[RawDocument]:
         file_paths: list[str] = options.get("file_paths", [])
         documents: list[RawDocument] = []
 
@@ -1681,9 +1676,9 @@ class FileConnector:
         return documents
 ```
 
-- [ ] **Step 5: Run connector tests**
+- [ ] **Step 5: Run parser tests**
 
-Run: `uv run pytest tests/test_ingestion/test_file_connector.py -v`
+Run: `uv run pytest tests/test_ingestion/test_file_parser.py -v`
 Expected: All pass.
 
 - [ ] **Step 6: Write failing API tests**
@@ -1735,14 +1730,14 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from engram.ingestion.connectors.file import FileConnector
+from engram.ingestion.parsers.file import FileParser
 from engram.models.connector import IngestionJob
 
 
 async def create_ingestion_job(
-    session: AsyncSession, connector_type: str
+    session: AsyncSession, source_type: str
 ) -> IngestionJob:
-    job = IngestionJob(connector_type=connector_type, status="pending")
+    job = IngestionJob(source_type=source_type, status="pending")
     session.add(job)
     await session.commit()
     await session.refresh(job)
@@ -1772,7 +1767,7 @@ async def ingest_file(session: AsyncSession, file_content: bytes, filename: str)
     return job
 ```
 
-- [ ] **Step 9: Implement ingest and connector routes**
+- [ ] **Step 9: Implement ingest routes**
 
 `src/engram/api/routes/ingest.py`:
 ```python
@@ -1802,79 +1797,39 @@ async def ingestion_status(job_id: str, session: AsyncSession = Depends(get_sess
     return {
         "job_id": str(job.id),
         "status": job.status,
-        "connector_type": job.connector_type,
+        "source_type": job.source_type,
         "items_processed": job.items_processed,
         "items_failed": job.items_failed,
         "error_message": job.error_message if job.status == "failed" else None,
     }
 ```
 
-`src/engram/api/routes/connectors.py`:
+Add export ingestion route to `src/engram/api/routes/ingest.py`:
 ```python
-from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from engram.api.deps import require_owner
-from engram.db import get_session
-from engram.encryption import encrypt, decrypt
-from engram.models.connector import ConnectorConfig
-import json
-
-router = APIRouter(prefix="/connectors", tags=["connectors"], dependencies=[Depends(require_owner)])
 
 
-class ConnectorConfigureRequest(BaseModel):
-    credentials: dict
+class IngestExportRequest(BaseModel):
+    platform: str  # gmail, reddit, facebook, instagram
+    export_path: str  # path to export directory on disk
 
 
-@router.post("/{connector_type}/configure")
-async def configure_connector(
-    connector_type: str, body: ConnectorConfigureRequest, session: AsyncSession = Depends(get_session)
-):
-    # Upsert: update if exists, create if not
-    result = await session.execute(
-        select(ConnectorConfig).where(ConnectorConfig.connector_type == connector_type)
-    )
-    existing = result.scalar_one_or_none()
+@router.post("/export", status_code=202)
+async def ingest_export(body: IngestExportRequest, session: AsyncSession = Depends(get_session)):
+    """Ingest a data export directory from a platform."""
+    from pathlib import Path
+    from fastapi import HTTPException
 
-    encrypted = encrypt(json.dumps(body.credentials))
+    export_dir = Path(body.export_path)
+    if not export_dir.exists() or not export_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Export path must be an existing directory")
 
-    if existing:
-        existing.credentials = encrypted
-        existing.status = "active"
-    else:
-        config = ConnectorConfig(
-            connector_type=connector_type, credentials=encrypted, status="active"
-        )
-        session.add(config)
+    valid_platforms = {"gmail", "reddit", "facebook", "instagram"}
+    if body.platform not in valid_platforms:
+        raise HTTPException(status_code=400, detail=f"Platform must be one of: {', '.join(valid_platforms)}")
 
-    await session.commit()
-    return {"status": "configured", "connector_type": connector_type}
-
-
-@router.get("")
-async def list_connectors(session: AsyncSession = Depends(get_session)):
-    result = await session.execute(select(ConnectorConfig))
-    configs = result.scalars().all()
-    return [
-        {"connector_type": c.connector_type, "status": c.status}
-        for c in configs
-    ]
-
-
-@router.delete("/{connector_type}")
-async def delete_connector(connector_type: str, session: AsyncSession = Depends(get_session)):
-    result = await session.execute(
-        select(ConnectorConfig).where(ConnectorConfig.connector_type == connector_type)
-    )
-    config = result.scalar_one_or_none()
-    if not config:
-        raise HTTPException(status_code=404, detail="Connector not found")
-    await session.delete(config)
-    await session.commit()
-    return {"status": "deleted"}
+    job = await create_ingestion_job(session, body.platform)
+    return {"job_id": str(job.id), "status": job.status, "platform": body.platform}
 ```
 
 - [ ] **Step 10: Register routes**
@@ -1882,10 +1837,8 @@ async def delete_connector(connector_type: str, session: AsyncSession = Depends(
 Update `src/engram/api/routes/__init__.py` to include:
 ```python
 from engram.api.routes.ingest import router as ingest_router
-from engram.api.routes.connectors import router as connectors_router
 
 api_router.include_router(ingest_router)
-api_router.include_router(connectors_router)
 ```
 
 - [ ] **Step 11: Run all tests**
@@ -1896,8 +1849,8 @@ Expected: All pass.
 - [ ] **Step 12: Commit**
 
 ```bash
-git add src/engram/ingestion/ src/engram/api/routes/ingest.py src/engram/api/routes/connectors.py src/engram/api/routes/__init__.py tests/
-git commit -m "feat: file ingestion connector, job tracking, and connector management API"
+git add src/engram/ingestion/ src/engram/api/routes/ingest.py src/engram/api/routes/__init__.py tests/
+git commit -m "feat: file ingestion parser, job tracking, and export ingest API"
 ```
 
 ---
@@ -2703,7 +2656,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from engram.ingestion.connectors.base import RawDocument
+from engram.ingestion.parsers.base import RawDocument
 from engram.memory.service import MemoryService
 from engram.processing.analyzer import analyze_chunk
 from engram.processing.chunker import chunk_text
@@ -3985,44 +3938,78 @@ git commit -m "feat: MCP server with engram tools (answer, topics, beliefs, sear
 
 ---
 
-## Tasks 12-18: Remaining Modules
+## Tasks 12-19: Remaining Modules
 
 The remaining tasks follow the same TDD pattern. For brevity, here are the task outlines with acceptance criteria. The implementing agent should follow the same write-test → verify-fail → implement → verify-pass → commit cycle.
 
 ---
 
-### Task 12: Gmail Connector
+### Task 12: Gmail Export Parser
 
-**Files:** `src/engram/ingestion/connectors/gmail.py`, `tests/test_ingestion/test_gmail_connector.py`
+**Files:** `src/engram/ingestion/parsers/gmail.py`, `tests/test_ingestion/test_gmail_parser.py`
 
-- [ ] Implement Gmail OAuth flow (local redirect on localhost:8090 + manual code fallback)
-- [ ] Implement message fetching with date range and label filters
-- [ ] Extract plain text body + image attachments
-- [ ] Tag authorship: sent = "user_authored", received = "received"
-- [ ] Add `POST /api/connectors/gmail/configure` handling
-- [ ] Write tests with mocked Google API client
-- [ ] Commit: `feat: Gmail connector with OAuth flow and message ingestion`
+- [ ] Implement MBOX parsing using Python's `mailbox` stdlib module
+- [ ] Accept export directory path containing `.mbox` files (Google Takeout format)
+- [ ] Extract plain text body from each message, handle multipart MIME
+- [ ] Extract image attachments from MIME parts
+- [ ] Parse From/Date headers for metadata
+- [ ] Tag authorship: sent (from user's address) = "user_authored", received = "received"
+- [ ] Write tests with sample MBOX data (no external dependencies needed)
+- [ ] Commit: `feat: Gmail export parser for MBOX/Google Takeout data`
 
-**Acceptance:** `uv run pytest tests/test_ingestion/test_gmail_connector.py -v` passes.
-
----
-
-### Task 13: Reddit Connector
-
-**Files:** `src/engram/ingestion/connectors/reddit.py`, `tests/test_ingestion/test_reddit_connector.py`
-
-- [ ] Implement PRAW-based fetching: user posts, comments, saved items
-- [ ] Extract image posts
-- [ ] Tag authorship: user content = "user_authored", replies = "other_reply"
-- [ ] Add `POST /api/connectors/reddit/configure` handling
-- [ ] Write tests with mocked PRAW client
-- [ ] Commit: `feat: Reddit connector with PRAW integration`
-
-**Acceptance:** `uv run pytest tests/test_ingestion/test_reddit_connector.py -v` passes.
+**Acceptance:** `uv run pytest tests/test_ingestion/test_gmail_parser.py -v` passes.
 
 ---
 
-### Task 14: Photo System + Image Generation
+### Task 13: Reddit Export Parser
+
+**Files:** `src/engram/ingestion/parsers/reddit.py`, `tests/test_ingestion/test_reddit_parser.py`
+
+- [ ] Parse Reddit JSON data export archive (posts.json, comments.json, etc.)
+- [ ] Accept export directory path containing Reddit's JSON export files
+- [ ] Extract post titles + self text, comment bodies
+- [ ] Tag authorship: user posts/comments = "user_authored"
+- [ ] Write tests with sample JSON data (no external dependencies needed)
+- [ ] Commit: `feat: Reddit export parser for JSON archive data`
+
+**Acceptance:** `uv run pytest tests/test_ingestion/test_reddit_parser.py -v` passes.
+
+---
+
+### Task 14: Facebook Export Parser
+
+**Files:** `src/engram/ingestion/parsers/facebook.py`, `tests/test_ingestion/test_facebook_parser.py`
+
+- [ ] Parse Facebook JSON data export archive (posts, comments, messages)
+- [ ] Accept export directory path containing Facebook's JSON export structure
+- [ ] Handle Facebook's character encoding quirks (mojibake fix for UTF-8)
+- [ ] Extract posts, comments, messages from nested JSON structure
+- [ ] Tag authorship: user posts/messages = "user_authored", received messages = "received"
+- [ ] Write tests with sample JSON data (no external dependencies needed)
+- [ ] Commit: `feat: Facebook export parser for JSON archive data`
+
+**Acceptance:** `uv run pytest tests/test_ingestion/test_facebook_parser.py -v` passes.
+
+---
+
+### Task 15: Instagram Export Parser
+
+**Files:** `src/engram/ingestion/parsers/instagram.py`, `tests/test_ingestion/test_instagram_parser.py`
+
+- [ ] Parse Instagram JSON data export archive (posts, stories, messages)
+- [ ] Accept export directory path containing Instagram's JSON export structure
+- [ ] Handle same encoding quirks as Facebook (shared platform)
+- [ ] Extract post captions, comments, message text
+- [ ] Extract image file references from media metadata
+- [ ] Tag authorship: user posts/messages = "user_authored", received = "received"
+- [ ] Write tests with sample JSON data (no external dependencies needed)
+- [ ] Commit: `feat: Instagram export parser for JSON archive data`
+
+**Acceptance:** `uv run pytest tests/test_ingestion/test_instagram_parser.py -v` passes.
+
+---
+
+### Task 16: Photo System + Image Generation
 
 **Files:** `src/engram/photos/`, `src/engram/api/routes/photos.py`, `tests/test_photos/`
 
@@ -4039,11 +4026,11 @@ The remaining tasks follow the same TDD pattern. For brevity, here are the task 
 
 ---
 
-### Task 15: Export/Import
+### Task 17: Export/Import
 
 **Files:** `src/engram/api/routes/engram.py` (extend), `tests/test_api/test_engram.py` (extend)
 
-- [ ] Implement `POST /api/engram/export` — serialize all memories, identity, photos metadata to JSON (no credentials, no embeddings)
+- [ ] Implement `POST /api/engram/export` — serialize all memories, identity, photos metadata to JSON (no embeddings)
 - [ ] Implement `POST /api/engram/import` — deserialize, re-embed all memories, recreate records
 - [ ] Write tests verifying round-trip: export → import → data matches
 - [ ] Commit: `feat: engram export/import with re-embedding on import`
@@ -4052,16 +4039,16 @@ The remaining tasks follow the same TDD pattern. For brevity, here are the task 
 
 ---
 
-### Task 16: Setup Wizard CLI
+### Task 18: Setup Wizard CLI
 
 **Files:** `src/engram/cli.py`, `tests/test_cli.py`
 
 - [ ] Implement Click CLI with commands: `init`, `server`, `mcp`, `ingest`, `status`
-- [ ] `engram init`: infrastructure check/Docker start, API key prompts, profile creation, first owner token, connector setup (optional), initial ingestion, verification query
+- [ ] `engram init`: infrastructure check/Docker start, LLM API key prompts (support both direct API key and subscription/proxy approaches with verification), profile creation, first owner token, data export guidance (display platform-specific download instructions for Gmail/Reddit/Facebook/Instagram), optional initial ingestion, verification query
 - [ ] `engram server`: start FastAPI + RQ worker subprocess
 - [ ] `engram mcp`: start MCP server
-- [ ] `engram ingest`: trigger ingestion from configured connectors
-- [ ] `engram status`: show memory stats, connector statuses
+- [ ] `engram ingest <platform> <export_path>`: trigger ingestion from a data export directory
+- [ ] `engram status`: show memory stats, export ingestion statuses
 - [ ] Write tests for CLI commands (using Click testing utilities)
 - [ ] Commit: `feat: CLI with setup wizard, server, and management commands`
 
@@ -4069,7 +4056,7 @@ The remaining tasks follow the same TDD pattern. For brevity, here are the task 
 
 ---
 
-### Task 17: Distribution Packaging
+### Task 19: Distribution Packaging
 
 **Files:** `pyproject.toml` (update), `README.md` (update)
 
@@ -4082,7 +4069,7 @@ The remaining tasks follow the same TDD pattern. For brevity, here are the task 
 
 ---
 
-### Task 18: Integration Tests
+### Task 20: Integration Tests
 
 **Files:** `tests/test_integration/`
 
@@ -4143,15 +4130,15 @@ redis_conn = Redis.from_url(settings.redis_url)
 queue = Queue("engram", connection=redis_conn)
 
 
-def run_ingestion_job(job_id: str, file_path: str, connector_type: str):
+def run_ingestion_job(job_id: str, file_path: str, source_type: str):
     """Synchronous wrapper for async pipeline — called by RQ worker."""
-    asyncio.run(_process_job(job_id, file_path, connector_type))
+    asyncio.run(_process_job(job_id, file_path, source_type))
 
 
-async def _process_job(job_id: str, file_path: str, connector_type: str):
+async def _process_job(job_id: str, file_path: str, source_type: str):
     from pathlib import Path
     from engram.db import async_session
-    from engram.ingestion.connectors.file import FileConnector
+    from engram.ingestion.parsers.file import FileParser
     from engram.processing.pipeline import process_documents
     from engram.models.connector import IngestionJob
     from sqlalchemy import select
@@ -4166,8 +4153,8 @@ async def _process_job(job_id: str, file_path: str, connector_type: str):
         await session.commit()
 
         try:
-            connector = FileConnector()
-            docs = await connector.fetch({"file_paths": [file_path]})
+            parser = FileParser()
+            docs = await parser.parse({"file_paths": [file_path]})
             count = await process_documents(docs, session)
 
             job.status = "completed"
@@ -4527,119 +4514,99 @@ async def test_unauthenticated_request_rejected(db_session):
     app.dependency_overrides.clear()
 ```
 
-### Fix J: Detailed Gmail Connector (Task 12)
+### Fix J: Detailed Gmail Export Parser (Task 12)
 
 **Full implementation steps:**
 
-- [ ] **Step 1: Write test with mocked Google API**
+- [ ] **Step 1: Write test with sample MBOX data**
 
 ```python
-# tests/test_ingestion/test_gmail_connector.py
-from unittest.mock import AsyncMock, MagicMock, patch
-from engram.ingestion.connectors.gmail import GmailConnector
+# tests/test_ingestion/test_gmail_parser.py
+import tempfile
+import os
+from pathlib import Path
+from engram.ingestion.parsers.gmail import GmailExportParser
 
-async def test_gmail_fetch_messages():
-    connector = GmailConnector()
 
-    mock_service = MagicMock()
-    mock_messages = MagicMock()
-    mock_messages.list.return_value.execute.return_value = {
-        "messages": [{"id": "msg1"}]
-    }
-    mock_messages.get.return_value.execute.return_value = {
-        "id": "msg1",
-        "payload": {
-            "headers": [
-                {"name": "From", "value": "user@example.com"},
-                {"name": "Date", "value": "Mon, 1 Jan 2025 12:00:00 +0000"},
-            ],
-            "body": {"data": "SGVsbG8gV29ybGQ="},  # base64 "Hello World"
-        },
-    }
-    mock_service.users.return_value.messages.return_value = mock_messages
+async def test_gmail_parse_mbox():
+    # Create a minimal MBOX file (Google Takeout format)
+    mbox_content = (
+        'From user@example.com Mon Jan  1 12:00:00 2025\n'
+        'From: user@example.com\n'
+        'To: friend@example.com\n'
+        'Subject: Hello\n'
+        'Date: Mon, 1 Jan 2025 12:00:00 +0000\n'
+        'Content-Type: text/plain\n'
+        '\n'
+        'Hello World, this is a test email.\n'
+        '\n'
+        'From friend@example.com Mon Jan  2 12:00:00 2025\n'
+        'From: friend@example.com\n'
+        'To: user@example.com\n'
+        'Subject: Re: Hello\n'
+        'Date: Tue, 2 Jan 2025 12:00:00 +0000\n'
+        'Content-Type: text/plain\n'
+        '\n'
+        'Hey, got your message!\n'
+        '\n'
+    )
 
-    with patch.object(connector, "_get_service", return_value=mock_service):
-        connector.user_email = "user@example.com"
-        docs = await connector.fetch({"max_results": 10})
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mbox_path = Path(tmpdir) / "All mail Including Spam and Trash.mbox"
+        mbox_path.write_text(mbox_content)
 
-    assert len(docs) >= 1
+        parser = GmailExportParser(user_email="user@example.com")
+        docs = await parser.parse({"export_path": tmpdir})
+
+    assert len(docs) == 2
     assert docs[0].source == "gmail"
+    assert docs[0].authorship == "user_authored"
+    assert docs[1].authorship == "received"
+    assert "Hello World" in docs[0].content
+
+
+async def test_gmail_parse_empty_dir():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        parser = GmailExportParser(user_email="user@example.com")
+        docs = await parser.parse({"export_path": tmpdir})
+    assert len(docs) == 0
 ```
 
-- [ ] **Step 2: Implement GmailConnector**
+- [ ] **Step 2: Implement GmailExportParser**
 
 ```python
-# src/engram/ingestion/connectors/gmail.py
-import base64
-import json
+# src/engram/ingestion/parsers/gmail.py
+import mailbox
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
-from engram.ingestion.connectors.base import Connector, RawDocument
+from engram.ingestion.parsers.base import ExportParser, RawDocument
 
 
-class GmailConnector:
-    def __init__(self):
-        self.user_email: str | None = None
-        self._credentials_path: str | None = None
-        self._token_data: dict | None = None
+class GmailExportParser:
+    """Parses Gmail data from Google Takeout MBOX export files."""
 
-    async def configure(self, credentials: dict) -> None:
-        self._credentials_path = credentials.get("client_json_path")
-        self.user_email = credentials.get("user_email")
+    def __init__(self, user_email: str | None = None):
+        self.user_email = user_email
 
-        # Attempt OAuth flow
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-
-        flow = InstalledAppFlow.from_client_secrets_file(
-            self._credentials_path, SCOPES
-        )
-        try:
-            # Try local server redirect (port 8090)
-            creds = flow.run_local_server(port=8090, open_browser=True)
-        except Exception:
-            # Fallback to manual console flow
-            creds = flow.run_console()
-
-        self._token_data = {
-            "token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "token_uri": creds.token_uri,
-            "client_id": creds.client_id,
-            "client_secret": creds.client_secret,
-        }
-
-    def _get_service(self):
-        from google.oauth2.credentials import Credentials
-        from googleapiclient.discovery import build
-
-        creds = Credentials(**self._token_data)
-        return build("gmail", "v1", credentials=creds)
-
-    async def fetch(self, options: dict) -> list[RawDocument]:
-        service = self._get_service()
-        max_results = options.get("max_results", 100)
-        query = options.get("query", "")
-
-        messages_api = service.users().messages()
-        response = messages_api.list(userId="me", maxResults=max_results, q=query).execute()
-        message_ids = [m["id"] for m in response.get("messages", [])]
-
+    async def parse(self, options: dict) -> list[RawDocument]:
+        export_path = Path(options["export_path"])
         documents: list[RawDocument] = []
-        for msg_id in message_ids:
-            msg = messages_api.get(userId="me", id=msg_id, format="full").execute()
-            doc = self._parse_message(msg)
-            if doc:
-                documents.append(doc)
+
+        # Google Takeout puts mail in .mbox files
+        for mbox_file in export_path.glob("*.mbox"):
+            mbox = mailbox.mbox(str(mbox_file))
+            for message in mbox:
+                doc = self._parse_message(message)
+                if doc:
+                    documents.append(doc)
 
         return documents
 
-    def _parse_message(self, msg: dict) -> RawDocument | None:
-        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
-        from_addr = headers.get("From", "")
-        date_str = headers.get("Date", "")
+    def _parse_message(self, message: mailbox.mboxMessage) -> RawDocument | None:
+        from_addr = message.get("From", "")
+        date_str = message.get("Date", "")
 
         try:
             timestamp = parsedate_to_datetime(date_str)
@@ -4651,141 +4618,162 @@ class GmailConnector:
         authorship = "user_authored" if is_sent else "received"
 
         # Extract body text
-        body = self._extract_body(msg.get("payload", {}))
+        body = self._extract_body(message)
         if not body:
             return None
 
-        # Extract images
-        images = self._extract_images(msg.get("payload", {}))
+        # Extract images from attachments
+        images = self._extract_images(message)
+
+        subject = message.get("Subject", "")
+        source_ref = f"gmail:{message.get('Message-ID', subject)}"
 
         return RawDocument(
             content=body,
             source="gmail",
-            source_ref=msg["id"],
+            source_ref=source_ref,
             timestamp=timestamp,
             authorship=authorship,
             images=images,
         )
 
-    def _extract_body(self, payload: dict) -> str:
-        if "body" in payload and payload["body"].get("data"):
-            return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
+    def _extract_body(self, message: mailbox.mboxMessage) -> str:
+        if message.is_multipart():
+            for part in message.walk():
+                if part.get_content_type() == "text/plain":
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        charset = part.get_content_charset() or "utf-8"
+                        return payload.decode(charset, errors="replace")
+            return ""
+        else:
+            payload = message.get_payload(decode=True)
+            if payload:
+                charset = message.get_content_charset() or "utf-8"
+                return payload.decode(charset, errors="replace")
+            return ""
 
-        for part in payload.get("parts", []):
-            if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-                return base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
-
-        return ""
-
-    def _extract_images(self, payload: dict) -> list[bytes]:
-        images = []
-        for part in payload.get("parts", []):
-            if part.get("mimeType", "").startswith("image/") and part.get("body", {}).get("data"):
-                images.append(base64.urlsafe_b64decode(part["body"]["data"]))
+    def _extract_images(self, message: mailbox.mboxMessage) -> list[bytes]:
+        images: list[bytes] = []
+        if message.is_multipart():
+            for part in message.walk():
+                if part.get_content_type().startswith("image/"):
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        images.append(payload)
         return images
 ```
 
-### Fix K: Detailed Reddit Connector (Task 13)
+### Fix K: Detailed Reddit Export Parser (Task 13)
 
-- [ ] **Step 1: Write test with mocked PRAW**
+- [ ] **Step 1: Write test with sample JSON data**
 
 ```python
-# tests/test_ingestion/test_reddit_connector.py
-from unittest.mock import MagicMock, patch, PropertyMock
-from datetime import datetime, timezone
-from engram.ingestion.connectors.reddit import RedditConnector
+# tests/test_ingestion/test_reddit_parser.py
+import json
+import tempfile
+from pathlib import Path
+from engram.ingestion.parsers.reddit import RedditExportParser
 
 
-async def test_reddit_fetch_posts():
-    connector = RedditConnector()
+async def test_reddit_parse_posts():
+    posts_data = [
+        {
+            "title": "Python for ML",
+            "selftext": "I think Python is the best language for ML.",
+            "permalink": "/r/python/comments/abc123",
+            "created_utc": 1704067200,
+            "subreddit": "python",
+        }
+    ]
+    comments_data = [
+        {
+            "body": "Great post, I agree!",
+            "permalink": "/r/python/comments/abc123/comment/def456",
+            "created_utc": 1704067300,
+            "subreddit": "python",
+        }
+    ]
 
-    mock_submission = MagicMock()
-    mock_submission.selftext = "I think Python is the best language for ML."
-    mock_submission.title = "Python for ML"
-    mock_submission.permalink = "/r/python/comments/abc123"
-    mock_submission.created_utc = 1704067200.0
-    mock_submission.is_self = True
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "posts.json").write_text(json.dumps(posts_data))
+        (Path(tmpdir) / "comments.json").write_text(json.dumps(comments_data))
 
-    mock_comment = MagicMock()
-    mock_comment.body = "Great post, I agree!"
-    mock_comment.permalink = "/r/python/comments/abc123/comment/def456"
-    mock_comment.created_utc = 1704067300.0
-    type(mock_comment).author = PropertyMock(return_value=MagicMock(name="testuser"))
+        parser = RedditExportParser()
+        docs = await parser.parse({"export_path": tmpdir})
 
-    mock_redditor = MagicMock()
-    mock_redditor.submissions.new.return_value = [mock_submission]
-    mock_redditor.comments.new.return_value = [mock_comment]
+    assert len(docs) == 2
+    assert all(d.source == "reddit" for d in docs)
+    assert all(d.authorship == "user_authored" for d in docs)
+    assert "Python is the best" in docs[0].content
 
-    mock_reddit = MagicMock()
-    mock_reddit.redditor.return_value = mock_redditor
 
-    with patch.object(connector, "_reddit", mock_reddit):
-        connector._username = "testuser"
-        docs = await connector.fetch({"limit": 10})
-
-    assert len(docs) >= 2
-    assert any(d.authorship == "user_authored" for d in docs)
+async def test_reddit_parse_empty_dir():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        parser = RedditExportParser()
+        docs = await parser.parse({"export_path": tmpdir})
+    assert len(docs) == 0
 ```
 
-- [ ] **Step 2: Implement RedditConnector**
+- [ ] **Step 2: Implement RedditExportParser**
 
 ```python
-# src/engram/ingestion/connectors/reddit.py
+# src/engram/ingestion/parsers/reddit.py
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
-import praw
-
-from engram.ingestion.connectors.base import Connector, RawDocument
+from engram.ingestion.parsers.base import ExportParser, RawDocument
 
 
-class RedditConnector:
-    def __init__(self):
-        self._reddit: praw.Reddit | None = None
-        self._username: str | None = None
+class RedditExportParser:
+    """Parses Reddit data from the JSON data export archive."""
 
-    async def configure(self, credentials: dict) -> None:
-        self._reddit = praw.Reddit(
-            client_id=credentials["client_id"],
-            client_secret=credentials["client_secret"],
-            user_agent="engram:v0.1.0",
-            username=credentials.get("username"),
-            password=credentials.get("password"),
-        )
-        self._username = credentials.get("username")
-
-    async def fetch(self, options: dict) -> list[RawDocument]:
-        if not self._reddit or not self._username:
-            return []
-
-        limit = options.get("limit", 100)
+    async def parse(self, options: dict) -> list[RawDocument]:
+        export_path = Path(options["export_path"])
         documents: list[RawDocument] = []
 
-        redditor = self._reddit.redditor(self._username)
-
-        # Fetch user's submissions
-        for submission in redditor.submissions.new(limit=limit):
-            if submission.is_self and submission.selftext:
+        # Parse posts
+        posts_file = export_path / "posts.json"
+        if posts_file.exists():
+            posts = json.loads(posts_file.read_text(encoding="utf-8"))
+            for post in posts:
+                selftext = post.get("selftext", "").strip()
+                title = post.get("title", "")
+                content = f"{title}\n\n{selftext}" if selftext else title
+                if not content.strip():
+                    continue
                 documents.append(
                     RawDocument(
-                        content=f"{submission.title}\n\n{submission.selftext}",
+                        content=content,
                         source="reddit",
-                        source_ref=submission.permalink,
-                        timestamp=datetime.fromtimestamp(submission.created_utc, tz=timezone.utc),
+                        source_ref=post.get("permalink", ""),
+                        timestamp=datetime.fromtimestamp(
+                            post.get("created_utc", 0), tz=timezone.utc
+                        ),
                         authorship="user_authored",
                     )
                 )
 
-        # Fetch user's comments
-        for comment in redditor.comments.new(limit=limit):
-            documents.append(
-                RawDocument(
-                    content=comment.body,
-                    source="reddit",
-                    source_ref=comment.permalink,
-                    timestamp=datetime.fromtimestamp(comment.created_utc, tz=timezone.utc),
-                    authorship="user_authored",
+        # Parse comments
+        comments_file = export_path / "comments.json"
+        if comments_file.exists():
+            comments = json.loads(comments_file.read_text(encoding="utf-8"))
+            for comment in comments:
+                body = comment.get("body", "").strip()
+                if not body:
+                    continue
+                documents.append(
+                    RawDocument(
+                        content=body,
+                        source="reddit",
+                        source_ref=comment.get("permalink", ""),
+                        timestamp=datetime.fromtimestamp(
+                            comment.get("created_utc", 0), tz=timezone.utc
+                        ),
+                        authorship="user_authored",
+                    )
                 )
-            )
 
         return documents
 ```
@@ -4794,7 +4782,7 @@ class RedditConnector:
 
 ## Summary
 
-18 tasks, bottom-up, each producing working tested code with a commit. The ralph loop should:
+20 tasks, bottom-up, each producing working tested code with a commit. The ralph loop should:
 
 1. Read this plan AND the Required Additions section
 2. Execute each task sequentially
@@ -4811,5 +4799,5 @@ class RedditConnector:
 - Fix F (preference routes) → apply during Task 9
 - Fix G, H (engram API + MCP tools) → apply during Tasks 10, 11
 - Fix I (test infrastructure) → apply during Task 2
-- Fix J (Gmail) → replaces Task 12 outline
-- Fix K (Reddit) → replaces Task 13 outline
+- Fix J (Gmail export parser) → replaces Task 12 outline
+- Fix K (Reddit export parser) → replaces Task 13 outline
