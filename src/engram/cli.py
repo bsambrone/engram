@@ -104,7 +104,8 @@ def validate_openai_key(api_key: str) -> tuple[bool, str]:
 def fetch_openai_models(api_key: str) -> tuple[list[str], list[str]]:
     """Fetch available generation and embedding models from the OpenAI API.
 
-    Returns (generation_models, embedding_models).
+    Filters out deprecated, non-chat, and specialty models.
+    Returns (generation_models, embedding_models) sorted alphabetically.
     """
     try:
         import openai
@@ -112,22 +113,40 @@ def fetch_openai_models(api_key: str) -> tuple[list[str], list[str]]:
         client = openai.OpenAI(api_key=api_key)
         all_models = [m.id for m in client.models.list()]
 
-        # Generation models: gpt-*, o1*, o3*, o4* — exclude realtime/audio/tts/search/transcribe
-        skip_suffixes = (
-            "-realtime", "-audio", "-tts", "-transcribe", "-search", "-diarize",
+        # Exclude specialty/non-chat model types
+        skip_keywords = (
+            "realtime", "audio", "tts", "transcribe", "search",
+            "diarize", "instruct", "dall-e", "gpt-image", "chatgpt-image",
+            "whisper", "davinci", "babbage", "curie",
         )
-        generation = sorted(
-            m for m in all_models
-            if (m.startswith(("gpt-4", "gpt-5", "o1", "o3", "o4")) or m == "gpt-3.5-turbo")
-            and not any(m.endswith(s) or s[1:] in m for s in skip_suffixes)
-            and "-instruct" not in m
-        )
-        # Prefer base model names (no date suffix) at the top
-        def _sort_key(name: str) -> tuple[int, str]:
-            has_date = any(c.isdigit() for c in name.split("-")[-1]) and len(name.split("-")) > 2
-            return (1 if has_date else 0, name)
 
-        generation.sort(key=_sort_key)
+        # Deprecated models
+        deprecated = {
+            "gpt-3.5-turbo", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106",
+            "gpt-3.5-turbo-16k", "gpt-3.5-turbo-instruct",
+            "gpt-3.5-turbo-instruct-0914",
+            "gpt-4-0125-preview", "gpt-4-0613", "gpt-4-1106-preview",
+            "gpt-4-turbo-preview",
+            "gpt-4o-2024-05-13",
+        }
+
+        # Also skip: date-stamped variants (e.g. gpt-4.1-2025-04-14),
+        # -chat-latest, -codex, -codex-max, -codex-mini aliases
+        skip_suffixes = ("-chat-latest", "-codex", "-codex-max", "-codex-mini")
+
+        import re
+        date_pattern = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+        def _is_chat_model(name: str) -> bool:
+            return (
+                name.startswith(("gpt-", "o1", "o3", "o4"))
+                and not any(kw in name for kw in skip_keywords)
+                and name not in deprecated
+                and not any(name.endswith(s) for s in skip_suffixes)
+                and not date_pattern.search(name)
+            )
+
+        generation = sorted(m for m in all_models if _is_chat_model(m))
 
         # Embedding models
         embedding = sorted(m for m in all_models if "embedding" in m)
@@ -426,22 +445,18 @@ def _step2_llm_providers() -> dict:
         remaining = [m for m in gen_models if m not in ordered]
         display_models = ordered + remaining
 
-        click.echo(f"\nAvailable generation models ({len(display_models)} found):")
-        # Show top choices with numbers, truncate long lists
-        show_count = min(len(display_models), 15)
-        for i, name in enumerate(display_models[:show_count], 1):
+        click.echo(f"\nAvailable generation models ({len(display_models)}):")
+        for i, name in enumerate(display_models, 1):
             label = " (recommended)" if i == 1 else ""
             click.echo(f"  [{i}] {name}{label}")
-        if len(display_models) > show_count:
-            click.echo(f"  ... and {len(display_models) - show_count} more")
-        other_idx = show_count + 1
+        other_idx = len(display_models) + 1
         click.echo(f"  [{other_idx}] Other (enter model name)")
 
         valid_choices = [str(i) for i in range(1, other_idx + 1)]
         choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
         choice_int = int(choice)
 
-        if choice_int <= show_count:
+        if choice_int <= len(display_models):
             generation_model = display_models[choice_int - 1]
         else:
             generation_model = click.prompt("Enter model name")
