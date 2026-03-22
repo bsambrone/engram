@@ -1,5 +1,42 @@
-from sqlalchemy.orm import DeclarativeBase
+"""Models package — re-exports Base and all model classes for Alembic discovery."""
 
+from engram.models.auth import AccessToken
+from engram.models.base import Base
+from engram.models.connector import ConnectorConfig, IngestionJob
+from engram.models.identity import (
+    Belief,
+    BeliefMemory,
+    IdentityProfile,
+    IdentitySnapshot,
+    Preference,
+    PreferenceMemory,
+    StyleProfile,
+)
+from engram.models.memory import Memory, MemoryPerson, MemoryTopic, Person, Topic
+from engram.models.photo import Photo, PhotoPerson
 
-class Base(DeclarativeBase):
-    pass
+__all__ = [
+    "Base",
+    # memory
+    "Memory",
+    "Topic",
+    "MemoryTopic",
+    "Person",
+    "MemoryPerson",
+    # identity
+    "IdentityProfile",
+    "Belief",
+    "BeliefMemory",
+    "Preference",
+    "PreferenceMemory",
+    "StyleProfile",
+    "IdentitySnapshot",
+    # connector
+    "ConnectorConfig",
+    "IngestionJob",
+    # auth
+    "AccessToken",
+    # photo
+    "Photo",
+    "PhotoPerson",
+]
