@@ -26,6 +26,7 @@ The engram speaks as the person — not a chatbot, but a structured representati
 | Testing | pytest |
 | Linting/Formatting | ruff |
 | Auth model | Users bring their own API keys |
+| MBOX parsing | `mailbox` (Python stdlib) |
 
 ---
 
@@ -53,7 +54,7 @@ engram/
 │   │   ├── __init__.py
 │   │   ├── memory.py              # memories, topics, people, join tables
 │   │   ├── identity.py            # profiles, beliefs, preferences, style, snapshots
-│   │   ├── connector.py           # connector_configs, ingestion_jobs
+│   │   ├── connector.py           # data_exports, ingestion_jobs
 │   │   ├── auth.py                # access_tokens
 │   │   └── photo.py               # photos
 │   ├── ingestion/
@@ -63,8 +64,10 @@ engram/
 │   │       ├── __init__.py
 │   │       ├── base.py            # Connector protocol + RawDocument
 │   │       ├── file.py            # File upload connector
-│   │       ├── gmail.py           # Gmail API connector
-│   │       └── reddit.py          # Reddit PRAW connector
+│   │       ├── gmail.py           # Google Takeout MBOX export parser
+│   │       ├── reddit.py          # Reddit data export (JSON) parser
+│   │       ├── facebook.py        # Facebook data export (JSON) parser
+│   │       └── instagram.py       # Instagram data export (JSON) parser
 │   ├── processing/
 │   │   ├── __init__.py
 │   │   ├── pipeline.py            # Orchestrates normalize → chunk → embed → analyze → store
@@ -95,7 +98,6 @@ engram/
 │   │   └── routes/
 │   │       ├── __init__.py
 │   │       ├── ingest.py
-│   │       ├── connectors.py
 │   │       ├── memories.py
 │   │       ├── sources.py
 │   │       ├── identity.py
@@ -144,7 +146,7 @@ engram/
 | intent | Text | LLM-extracted: why was this said/written |
 | meaning | Text | LLM-extracted: what this reveals about the person |
 | timestamp | DateTime | When the original content was created |
-| source | String | "file", "gmail", "reddit" |
+| source | String | "file", "gmail", "reddit", "facebook", "instagram" |
 | source_ref | String | Original filename, message ID, permalink |
 | authorship | String | "user_authored", "received", "other_reply" |
 | importance_score | Float | 0.0–1.0, increases with reinforcement |
@@ -258,16 +260,17 @@ engram/
 | created_at | DateTime | |
 | updated_at | DateTime | |
 
-### Connector System
+### Data Exports
 
-#### connector_configs
+#### data_exports
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | UUID | Primary key |
-| connector_type | String | "gmail", "reddit" |
-| credentials | Text | Encrypted JSON (OAuth tokens, API keys) |
-| status | String | "active", "expired", "revoked" |
+| export_type | String | "gmail", "reddit", "facebook", "instagram" |
+| export_path | String | Path to the export directory/archive |
+| status | String | "detected", "processing", "completed", "failed" |
+| items_found | Integer | Number of items detected in the export |
 | created_at | DateTime | |
 | updated_at | DateTime | |
 
@@ -292,7 +295,7 @@ engram/
 | Column | Type | Notes |
 |--------|------|-------|
 | id | UUID | Primary key |
-| connector_type | String | "file", "gmail", "reddit" |
+| connector_type | String | "file", "gmail", "reddit", "facebook", "instagram" |
 | status | String | "pending", "running", "completed", "failed" |
 | started_at | DateTime (nullable) | |
 | completed_at | DateTime (nullable) | |
@@ -322,7 +325,7 @@ engram/
 | id | UUID | Primary key |
 | profile_id | UUID (FK, nullable) | Nullable — photos can be ingested before profile exists |
 | file_path | String | Local storage path |
-| source | String | "upload", "gmail", "reddit" |
+| source | String | "upload", "gmail", "reddit", "facebook", "instagram" |
 | source_ref | String | |
 | description | Text | LLM-generated description |
 | tags | String[] | "selfie", "group", "outdoor", etc. (GIN indexed for filtering) |
@@ -341,17 +344,21 @@ engram/
 
 ## Ingestion Service
 
+All data connectors are based on offline data export archives, NOT live API connections. Users download their data from each platform and engram processes the files locally. No OAuth flows, no live API tokens.
+
 ### Connector Interface
 
 ```python
-class Connector(Protocol):
-    async def configure(self, credentials: dict) -> None: ...
-    async def fetch(self, options: dict) -> list[RawDocument]: ...
+from pathlib import Path
+
+class ExportParser(Protocol):
+    def validate(self, export_path: Path) -> bool: ...
+    async def parse(self, export_path: Path) -> list[RawDocument]: ...
 
 @dataclass
 class RawDocument:
     content: str
-    source: str             # "file", "gmail", "reddit"
+    source: str             # "file", "gmail", "reddit", "facebook", "instagram"
     source_ref: str         # Filename, message ID, permalink
     timestamp: datetime
     authorship: str         # "user_authored", "received", "other_reply"
@@ -363,23 +370,29 @@ class RawDocument:
 - Text files: content extracted directly, authorship = "user_authored"
 - Images: stored as photos, analyzed by LLM
 
-### Gmail Connector
-- Google OAuth client JSON path provided via config
-- First-run OAuth flow: starts a temporary local HTTP server on `http://localhost:8090/callback` as the redirect URI. Opens the browser for Google consent. On callback, exchanges the auth code for tokens and stores the refresh token (encrypted) in connector_configs. For headless environments, falls back to manual copy-paste auth code flow.
-- Fetches messages (configurable: all, date range, labels)
-- Extracts plain text body + image attachments
-- Authorship: sent = "user_authored", received = "received"
+### Gmail Export Parser
+- Parses Google Takeout MBOX export files using Python's `mailbox` stdlib module
+- User downloads their Gmail data via Google Takeout (https://takeout.google.com), selects Mail, and receives an MBOX file
+- Extracts plain text body + image attachments from each message
+- Authorship: sent (From matches user) = "user_authored", received = "received"
 
-### Reddit Connector
-- Uses PRAW (Python Reddit API Wrapper)
-- Fetches user's posts, comments, saved items + image posts
-- Authorship: user posts/comments = "user_authored", replies = "other_reply"
+### Reddit Export Parser
+- Parses Reddit data export JSON archive
+- User requests their data via Reddit Settings → Privacy & Security → Request your data
+- Parses posts, comments, saved items from the JSON files
+- Authorship: user posts/comments = "user_authored", saved items from others = "other_reply"
 
-### Credential Setup
-- `POST /api/connectors/{type}/configure` — setup credentials
-- Gmail: accepts OAuth client JSON, triggers OAuth flow, stores tokens
-- Reddit: accepts client_id/secret/username, validates, stores
-- `GET /api/connectors` — returns status of all configured connectors
+### Facebook Export Parser
+- Parses Facebook data export JSON archive
+- User downloads via Facebook Settings → Your Information → Download Your Information (JSON format)
+- Parses posts, messages, comments, and photo metadata
+- Authorship: user posts/comments = "user_authored", messages received = "received", others' comments = "other_reply"
+
+### Instagram Export Parser
+- Parses Instagram data export JSON archive
+- User downloads via Instagram Settings → Your Activity → Download Your Information (JSON format)
+- Parses posts, stories, messages, and photo metadata
+- Authorship: user posts/stories = "user_authored", messages received = "received"
 
 ---
 
@@ -388,8 +401,8 @@ class RawDocument:
 ### Pipeline Flow
 
 ```
-ingest(connector, options)
-  → fetch raw documents (with authorship metadata)
+ingest(export_type, export_path)
+  → parse raw documents from export files (with authorship metadata)
   → for each document:
       normalize → chunk → embed
       → LLM analysis (intent, meaning, authorship-aware)
@@ -630,14 +643,12 @@ class SourceCitation:
 
 **Ingestion:**
 - `POST /api/ingest/file` — upload file(s)
-- `POST /api/ingest/gmail` — trigger Gmail ingestion
-- `POST /api/ingest/reddit` — trigger Reddit ingestion
+- `POST /api/ingest/gmail` — trigger processing of Gmail (Google Takeout MBOX) export; accepts `{ "export_path": "/path/to/Takeout/Mail" }`
+- `POST /api/ingest/reddit` — trigger processing of Reddit data export; accepts `{ "export_path": "/path/to/reddit-export" }`
+- `POST /api/ingest/facebook` — trigger processing of Facebook data export; accepts `{ "export_path": "/path/to/facebook-export" }`
+- `POST /api/ingest/instagram` — trigger processing of Instagram data export; accepts `{ "export_path": "/path/to/instagram-export" }`
 - `GET /api/ingest/status` — ingestion job status
-
-**Connectors:**
-- `POST /api/connectors/{type}/configure` — set up credentials
-- `GET /api/connectors` — list connector statuses
-- `DELETE /api/connectors/{type}` — remove connector
+- `GET /api/ingest/exports` — list detected/processed data exports and their status
 
 **Memory:**
 - `GET /api/memories?q=&topic=&person=&source=&from=&to=` — search/filter
@@ -717,7 +728,7 @@ Authorization: Bearer <token>
 3. Reject if not found, expired, or revoked
 4. Set `access_level` on the request context (available via FastAPI dependency injection)
 
-**Owner-only REST endpoints:** `/api/memories/*`, `/api/sources/*`, `/api/connectors/*`, `/api/identity/*` (write operations), `/api/config/*`, `/api/tokens/*`, `/api/ingest/*`, `/api/engram/export`, `/api/engram/import`
+**Owner-only REST endpoints:** `/api/memories/*`, `/api/sources/*`, `/api/identity/*` (write operations), `/api/config/*`, `/api/tokens/*`, `/api/ingest/*`, `/api/engram/export`, `/api/engram/import`
 
 **Shared-accessible REST endpoints:** `/api/engram/ask`, `/api/engram/topics`, `/api/engram/opinions`, `/api/engram/summarize`, `/api/engram/simulate`, `/api/engram/compare`, `/api/engram/imagine`, `GET /api/identity/beliefs`, `GET /api/identity/profile`
 
@@ -733,14 +744,12 @@ Ingestion is asynchronous. When an ingest endpoint is called:
 
 Redis is used as the job queue broker. The RQ worker runs as a separate process alongside the FastAPI server.
 
-### Credential Encryption
+### API Key Security
 
-Connector credentials (OAuth tokens, API keys) are encrypted at rest using Fernet symmetric encryption (from the `cryptography` library):
+LLM API keys (Anthropic, OpenAI) are stored in the `.env` file, not in the database. No OAuth tokens or connector credentials are stored — all data connectors work with local export files, so there are no secrets to encrypt beyond the API keys and the `.env` file itself.
 
-- A `ENGRAM_ENCRYPTION_KEY` is generated during `engram init` and stored in `.env`
-- Generated via `cryptography.fernet.Fernet.generate_key()`
-- Used to encrypt/decrypt the `credentials` JSON column in `connector_configs`
-- If the key is lost, connector credentials must be re-configured
+- Ensure `.env` is in `.gitignore` and has restrictive file permissions (600)
+- The `ENGRAM_ENCRYPTION_KEY` (generated during `engram init`) is retained for encrypting access tokens at rest
 
 ---
 
@@ -798,8 +807,9 @@ engram status      # Show engram stats
 - Verify pgvector, run Alembic migrations
 
 **Step 2: API Keys + First Token**
-- Prompt for Anthropic API key (required)
-- Prompt for OpenAI API key (required)
+- Prompt for Anthropic API key (required — or subscription-based access if available)
+- Prompt for OpenAI API key (required — or subscription-based access if available)
+- The wizard should guide users through either API key or subscription-based access for each provider and verify the chosen method works
 - Validate both, store in .env
 - Generate and display the first owner access token (save this — it's shown only once)
 
@@ -808,14 +818,19 @@ engram status      # Show engram stats
 - Upload reference photos (optional)
 - Create default identity_profile
 
-**Step 4: Data Connectors (optional)**
-- File upload: provide directory path
-- Gmail: walk through OAuth setup, browser auth, cache tokens
-- Reddit: enter client_id/secret, validate
-- Each independently optional
+**Step 4: Data Exports (optional)**
+- Guide users through downloading their data from each platform:
+  - **Gmail**: "Go to https://takeout.google.com → Select 'Mail' → Download as MBOX"
+  - **Reddit**: "Go to Reddit Settings → Privacy & Security → Request your data → Wait for email with download link"
+  - **Facebook**: "Go to Facebook Settings → Your Information → Download Your Information → Select JSON format"
+  - **Instagram**: "Go to Instagram Settings → Your Activity → Download Your Information → Select JSON format"
+- Tell users where to place the downloaded archives (default: `~/.engram/exports/{platform}/`)
+- File upload: provide directory path for txt/md/json files
+- The wizard should detect and validate export files in the expected directories
+- Each platform independently optional
 
 **Step 5: Initial Ingestion**
-- Run first ingestion if connectors configured
+- Run first ingestion for any detected/configured exports
 - Show progress and report
 
 **Step 6: Verify**
@@ -838,7 +853,7 @@ engram import engram-export.json    # Load existing engram
 
 ### Photo Ingestion
 - Direct upload via API or setup wizard
-- Connector extraction: Gmail attachments, Reddit image posts, file uploads
+- Export extraction: Gmail attachment images, Reddit/Facebook/Instagram image posts from exports, file uploads
 - LLM vision analysis: description, tags, people identification
 - User marks best reference photos (is_reference=True)
 
@@ -873,7 +888,8 @@ All configuration is via Pydantic `BaseSettings` reading from environment variab
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
 | `ANTHROPIC_API_KEY` | (required) | Claude API key |
 | `OPENAI_API_KEY` | (required) | OpenAI API key (embeddings + image generation) |
-| `ENGRAM_ENCRYPTION_KEY` | (generated by `engram init`) | Fernet key for credential encryption |
+| `ENGRAM_ENCRYPTION_KEY` | (generated by `engram init`) | Fernet key for access token encryption |
+| `EXPORT_BASE_DIR` | `~/.engram/exports` | Base directory where platform data exports are placed |
 | `CHUNK_SIZE_TOKENS` | `500` | Max tokens per chunk |
 | `CHUNK_OVERLAP_TOKENS` | `50` | Overlap between chunks |
 | `MEMORY_DECAY_HALFLIFE_DAYS` | `365` | How fast recency weight decays |
@@ -954,7 +970,7 @@ The export file is a self-contained JSON document:
 }
 ```
 
-**Excluded from export:** API keys, connector credentials, access tokens, embeddings (re-generated on import), ingestion job history.
+**Excluded from export:** API keys, access tokens, embeddings (re-generated on import), ingestion job history, data export paths.
 
 **Import process:**
 1. Create identity profile from export data
@@ -969,7 +985,7 @@ The export file is a self-contained JSON document:
 
 ### Unit Tests (per module)
 
-**Ingestion:** connector parsing, authorship tagging, credential storage
+**Ingestion:** export parsing (MBOX, JSON archives), authorship tagging, export validation
 **Processing:** normalization, chunking, embedding dimensions, LLM analysis extraction, authorship filtering
 **Memory:** CRUD, vector search, filtered search, reinforcement, degradation, evolution, visibility filtering
 **Identity:** inference from memories, user override protection, snapshot capture/restore
@@ -1006,18 +1022,18 @@ Bottom-up, each step builds on the last. REST routes are built alongside their s
 2. **Data models + migrations** — all SQLAlchemy models, Alembic migration to create all tables (including indexes: GIN on tags, HNSW/IVFFlat on embedding vectors)
 3. **Auth system + tokens API** — token model, token CRUD (`POST/GET/DELETE /api/tokens`), first owner token creation, bearer auth FastAPI dependency, access level middleware. This must be complete before any other API route, since all routes depend on auth.
 4. **Config API** — `GET /api/config`, `PUT /api/config/keys`
-5. **File ingestion connector** — connector protocol, file connector, `POST /api/ingest/file`, async job queue with RQ worker, `GET /api/ingest/status`, connector CRUD (`POST /api/connectors/{type}/configure`, `GET /api/connectors`, `DELETE /api/connectors/{type}`)
+5. **File ingestion connector** — export parser protocol, file connector, `POST /api/ingest/file`, async job queue with RQ worker, `GET /api/ingest/status`, `GET /api/ingest/exports`
 6. **Processing pipeline (stages 1-3)** — normalizer, chunker, embedder (OpenAI). These are the non-LLM stages. Build and test independently: file in → normalized text → chunks → embeddings stored. Memory evolution (stage 5) is NOT connected yet.
 7. **LLM analysis (stage 4)** — Claude-powered intent/meaning/authorship analysis, analyzer module. Extends the pipeline: chunks now get analyzed. Still stores memories without evolution.
 8. **Memory system + API** — repository (CRUD, vector search, filtered search), service (remember, recall, reinforce, degrade, evolve, timeline, contradictions, stats, summarize), all `/api/memories/*` and `/api/sources/*` routes. **After this step, connect memory evolution (pipeline stage 5) so the full pipeline runs end-to-end:** new ingestions now check for existing memories and reinforce/degrade/evolve as needed.
 9. **Identity layer + API** — inference engine, repository, service (overrides, snapshots), all `/api/identity/*` routes including snapshot CRUD
 10. **RAG engine + engram API** — prompt assembly, response generation, `/api/engram/*` routes: ask, topics, opinions, summarize, simulate, compare, explain-belief. Note: `imagine` endpoint comes in step 14.
 11. **MCP server** — MCP Python SDK integration, all tools (except `imagine`), access control, `engram mcp` CLI command. **Startup:** `engram server` starts FastAPI + spawns RQ worker as a subprocess. `engram mcp` is a separate command/process.
-12. **Gmail connector** — OAuth flow (local redirect on `localhost:8090/callback` + headless manual code fallback), Gmail API fetch, `/api/connectors/gmail/configure`
-13. **Reddit connector** — PRAW integration, fetch posts/comments/saved, `/api/connectors/reddit/configure`
+12. **Gmail export parser** — Google Takeout MBOX parser using `mailbox` stdlib, `POST /api/ingest/gmail`, export validation
+13. **Reddit, Facebook, Instagram export parsers** — JSON archive parsers for each platform, `POST /api/ingest/reddit`, `POST /api/ingest/facebook`, `POST /api/ingest/instagram`, export validation
 14. **Photo system + image generation** — photo upload/storage, LLM vision analysis, GPT Image generation, `/api/photos/*` routes, `POST /api/engram/imagine`, `imagine` MCP tool
 15. **Export/import** — export JSON format, `POST /api/engram/export`, `POST /api/engram/import`, `engram import` CLI
-16. **Setup wizard** — `engram init` interactive CLI (infrastructure, keys, profile, connectors, initial ingestion, verify). Depends on steps 1-5 and 12-13 being complete.
+16. **Setup wizard** — `engram init` interactive CLI (infrastructure, keys, profile, data export guidance, export detection/validation, initial ingestion, verify). Depends on steps 1-5 and 12-13 being complete.
 17. **Distribution packaging** — PyPI setup, `engram` CLI entry points in pyproject.toml
 18. **Integration tests** — full pipeline, identity flow, evolution flow, privacy flow
 
@@ -1031,11 +1047,11 @@ Bottom-up, each step builds on the last. REST routes are built alongside their s
 
 | Risk | Mitigation |
 |------|------------|
-| Privacy (storing personal data) | All local, user-controlled, encrypted credentials, visibility controls |
+| Privacy (storing personal data) | All local, user-controlled, no live API connections, data never leaves machine, visibility controls |
 | Hallucination (engram says things the person never said) | Strict grounding in memories, confidence scores, "insufficient data" responses |
 | Identity drift (engram diverges from real person) | Memory evolution tracking, user overrides, snapshots, contradiction detection |
 | API costs (Claude + OpenAI) | Batching, caching embeddings, configurable processing depth |
-| Connector auth complexity | Setup wizard, token caching, clear error messages |
+| Export format changes (platforms may change their export format) | Versioned parsers, validation on import, clear error messages when format is unrecognized |
 
 ---
 
@@ -1045,5 +1061,5 @@ Bottom-up, each step builds on the last. REST routes are built alongside their s
 - Video avatars
 - Continuous learning (real-time ingestion)
 - Multi-agent identities
-- Additional connectors (Twitter/X, Discord, Slack, etc.)
+- Additional export parsers (Twitter/X, Discord, Slack, etc.)
 - Web UI for memory/identity management
