@@ -300,7 +300,8 @@ def _prompt_api_key(
 
 # OpenAI generation model choices
 OPENAI_GENERATION_MODELS = [
-    ("gpt-4.1", "recommended -- best quality"),
+    ("gpt-5.2", "recommended -- latest, best quality"),
+    ("gpt-4.1", "great quality"),
     ("gpt-4o", "fast, great quality"),
     ("gpt-4o-mini", "fastest, good quality, cheapest"),
     ("o3", "reasoning model -- slowest, highest quality"),

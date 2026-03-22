@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
     generation_provider: str = "openai"
-    generation_model: str = "gpt-4.1"
+    generation_model: str = "gpt-5.2"
 
     photo_storage_dir: str = "~/.engram/photos"
 
