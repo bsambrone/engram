@@ -1,20 +1,19 @@
 """initial schema
 
-Revision ID: ed7062c8c3ef
-Revises:
-Create Date: 2026-03-22 15:33:11.161492
+Revision ID: bd5742f77030
+Revises: 
+Create Date: 2026-03-22 15:43:11.698124
 
 """
 from typing import Sequence, Union
 
-import pgvector.sqlalchemy.vector
+from alembic import op
+import pgvector.sqlalchemy
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-from alembic import op
-
 # revision identifiers, used by Alembic.
-revision: str = 'ed7062c8c3ef'
+revision: str = 'bd5742f77030'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -25,7 +24,7 @@ def upgrade() -> None:
     op.create_table('access_tokens',
     sa.Column('name', sa.String(length=200), nullable=False),
     sa.Column('token_hash', sa.String(length=128), nullable=False),
-    sa.Column('access_level', sa.String(length=20), server_default='read', nullable=False),
+    sa.Column('access_level', sa.String(length=20), nullable=False),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
     sa.Column('expires_at', sa.DateTime(), nullable=True),
     sa.Column('revoked_at', sa.DateTime(), nullable=True),
@@ -66,7 +65,7 @@ def upgrade() -> None:
     sa.Column('parent_memory_id', sa.Uuid(), nullable=True),
     sa.Column('content', sa.Text(), nullable=False),
     sa.Column('embedding', pgvector.sqlalchemy.vector.VECTOR(dim=1536), nullable=True),
-    sa.Column('intent', sa.String(length=100), nullable=True),
+    sa.Column('intent', sa.Text(), nullable=True),
     sa.Column('meaning', sa.Text(), nullable=True),
     sa.Column('timestamp', sa.DateTime(), nullable=True),
     sa.Column('source', sa.String(length=50), nullable=True),
@@ -76,7 +75,7 @@ def upgrade() -> None:
     sa.Column('confidence', sa.Float(), nullable=True),
     sa.Column('reinforcement_count', sa.Integer(), server_default='0', nullable=False),
     sa.Column('last_reinforced_at', sa.DateTime(), nullable=True),
-    sa.Column('visibility', sa.String(length=20), server_default='private', nullable=False),
+    sa.Column('visibility', sa.String(length=20), server_default='active', nullable=False),
     sa.Column('status', sa.String(length=20), server_default='active', nullable=False),
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),

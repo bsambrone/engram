@@ -46,7 +46,7 @@ class Memory(UUIDMixin, TimestampMixin, Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding = mapped_column(Vector(1536), nullable=True)
-    intent: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    intent: Mapped[str | None] = mapped_column(Text, nullable=True)
     meaning: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime | None] = mapped_column(nullable=True)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -56,7 +56,7 @@ class Memory(UUIDMixin, TimestampMixin, Base):
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     reinforcement_count: Mapped[int] = mapped_column(default=0, server_default="0")
     last_reinforced_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    visibility: Mapped[str] = mapped_column(String(20), server_default="private")
+    visibility: Mapped[str] = mapped_column(String(20), server_default="active")
     status: Mapped[str] = mapped_column(String(20), server_default="active")
 
     # Self-referential relationships
