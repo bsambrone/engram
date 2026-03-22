@@ -12,9 +12,10 @@ class Settings(BaseSettings):
     chunk_size_tokens: int = 500
     chunk_overlap_tokens: int = 50
     memory_decay_halflife_days: int = 365
-    embedding_model: str = "text-embedding-ada-002"
+    embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
-    llm_model: str = "claude-sonnet-4-20250514"
+    generation_provider: str = "openai"
+    generation_model: str = "gpt-4.1"
 
     photo_storage_dir: str = "~/.engram/photos"
 

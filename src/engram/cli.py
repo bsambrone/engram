@@ -76,13 +76,12 @@ def validate_anthropic_key(api_key: str) -> tuple[bool, str]:
         import anthropic
 
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=10,
+            max_tokens=5,
             messages=[{"role": "user", "content": "hi"}],
         )
-        model = response.model
-        return True, f"Claude API key works! (Model: {model})"
+        return True, "Claude API key works!"
     except Exception as exc:
         return False, f"Anthropic validation failed: {exc}"
 
@@ -96,10 +95,63 @@ def validate_openai_key(api_key: str) -> tuple[bool, str]:
         import openai
 
         client = openai.OpenAI(api_key=api_key)
-        client.embeddings.create(input=["test"], model="text-embedding-ada-002")
-        return True, "OpenAI API key works! (Embedding model: text-embedding-ada-002)"
+        client.embeddings.create(input=["test"], model="text-embedding-3-small")
+        return True, "OpenAI API key works!"
     except Exception as exc:
         return False, f"OpenAI validation failed: {exc}"
+
+
+def validate_openai_generation(api_key: str, model: str) -> tuple[bool, str]:
+    """Validate that an OpenAI model works for chat generation.
+
+    Returns (success, message).
+    """
+    try:
+        import openai
+
+        client = openai.OpenAI(api_key=api_key)
+        client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=5,
+        )
+        return True, f"{model} works!"
+    except Exception as exc:
+        return False, f"OpenAI generation validation failed: {exc}"
+
+
+def validate_anthropic_generation(api_key: str, model: str) -> tuple[bool, str]:
+    """Validate that an Anthropic model works for generation.
+
+    Returns (success, message).
+    """
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=api_key)
+        client.messages.create(
+            model=model,
+            max_tokens=5,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        return True, f"{model} works!"
+    except Exception as exc:
+        return False, f"Anthropic generation validation failed: {exc}"
+
+
+def validate_openai_embedding(api_key: str, model: str) -> tuple[bool, str]:
+    """Validate that an OpenAI embedding model works.
+
+    Returns (success, message).
+    """
+    try:
+        import openai
+
+        client = openai.OpenAI(api_key=api_key)
+        client.embeddings.create(input=["test"], model=model)
+        return True, f"{model} works!"
+    except Exception as exc:
+        return False, f"OpenAI embedding validation failed: {exc}"
 
 
 async def _create_identity_profile(database_url: str, name: str, description: str | None):
@@ -225,44 +277,47 @@ def status():
 # Init wizard helpers (one function per step, called sequentially)
 # ---------------------------------------------------------------------------
 
-def _prompt_llm_provider(
+def _prompt_api_key(
     provider_name: str,
     validate_fn,
 ) -> str | None:
-    """Prompt the user for an LLM provider API key with auth method selection.
+    """Prompt the user for an API key and validate it.
 
-    Returns the validated API key, or None if the user chose subscription (stub).
+    Returns the validated API key, or None if the user gives up.
     """
-    click.echo(f"\n--- {provider_name} ---")
-    click.echo("Authentication method:")
-    click.echo("  [1] API Key (recommended)")
-    click.echo("  [2] Subscription-based access (coming soon)")
+    while True:
+        api_key = click.prompt(f"Enter your {provider_name} API key", hide_input=False)
+        click.echo("Validating... ", nl=False)
+        ok, msg = validate_fn(api_key)
+        if ok:
+            click.echo(f"  {msg}")
+            return api_key
+        else:
+            click.echo(f"  {msg}")
+            if not click.confirm("Try again?", default=True):
+                return None
 
-    choice = click.prompt("Choice", default="1", type=click.Choice(["1", "2"]))
 
-    if choice == "2":
-        click.echo(
-            f"\nSubscription-based access is not yet available. This feature is planned "
-            f"for when {provider_name} supports subscription-based API access. "
-            f"Please use an API key for now."
-        )
-        # Re-prompt with API key path
-        choice = "1"
+# OpenAI generation model choices
+OPENAI_GENERATION_MODELS = [
+    ("gpt-4.1", "recommended -- best quality"),
+    ("gpt-4o", "fast, great quality"),
+    ("gpt-4o-mini", "fastest, good quality, cheapest"),
+    ("o3", "reasoning model -- slowest, highest quality"),
+]
 
-    if choice == "1":
-        while True:
-            api_key = click.prompt(f"Enter your {provider_name} API key", hide_input=False)
-            click.echo("Validating... ", nl=False)
-            ok, msg = validate_fn(api_key)
-            if ok:
-                click.echo(f"  {msg}")
-                return api_key
-            else:
-                click.echo(f"  {msg}")
-                if not click.confirm("Try again?", default=True):
-                    return None
+# Anthropic generation model choices
+ANTHROPIC_GENERATION_MODELS = [
+    ("claude-sonnet-4-20250514", "recommended"),
+    ("claude-haiku-4-5-20251001", "fastest"),
+]
 
-    return None
+# Embedding model choices
+EMBEDDING_MODELS = [
+    ("text-embedding-3-small", "recommended -- good quality, fast"),
+    ("text-embedding-3-large", "best quality, slower"),
+    ("text-embedding-ada-002", "legacy"),
+]
 
 
 def _step1_infrastructure() -> bool:
@@ -316,20 +371,127 @@ def _step1_infrastructure() -> bool:
     return True
 
 
-def _step2_llm_providers() -> tuple[str | None, str | None]:
-    """Step 2: LLM Provider Setup. Returns (anthropic_key, openai_key)."""
+def _step2_llm_providers() -> dict:
+    """Step 2: LLM Provider Setup.
+
+    Returns a dict with keys:
+        openai_key, anthropic_key, generation_provider, generation_model, embedding_model
+    """
     click.echo("\n Step 2: LLM Provider Setup\n")
-    click.echo("Engram needs access to Claude (for analysis) and OpenAI (for embeddings).")
+    click.echo(
+        "Engram needs an OpenAI API key for embeddings (required) "
+        "and a generation model for analysis."
+    )
 
-    anthropic_key = _prompt_llm_provider("Anthropic (Claude)", validate_anthropic_key)
-    openai_key = _prompt_llm_provider("OpenAI", validate_openai_key)
+    # --- OpenAI API Key (always required) ---
+    click.echo("\n--- OpenAI API Key ---")
+    openai_key = _prompt_api_key("OpenAI", validate_openai_key)
+    if not openai_key:
+        click.echo("OpenAI API key is required for embeddings.")
+        return {
+            "openai_key": None,
+            "anthropic_key": None,
+            "generation_provider": "openai",
+            "generation_model": "gpt-4.1",
+            "embedding_model": "text-embedding-3-small",
+        }
 
-    return anthropic_key, openai_key
+    # --- Generation Model ---
+    click.echo("\n--- Generation Model ---")
+    click.echo("You can use OpenAI or Anthropic (Claude) for text generation.")
+    has_anthropic = click.confirm("Do you have an Anthropic API key?", default=False)
+
+    anthropic_key = None
+    generation_provider = "openai"
+    generation_model = "gpt-4.1"
+
+    if has_anthropic:
+        click.echo("")
+        anthropic_key = _prompt_api_key("Anthropic (Claude)", validate_anthropic_key)
+
+    if anthropic_key:
+        generation_provider = "anthropic"
+        click.echo("\nUsing Anthropic for generation. Available models:")
+        models = ANTHROPIC_GENERATION_MODELS
+        for i, (name, desc) in enumerate(models, 1):
+            click.echo(f"  [{i}] {name} ({desc})")
+        other_idx = len(models) + 1
+        click.echo(f"  [{other_idx}] Other (enter model name)")
+
+        valid_choices = [str(i) for i in range(1, other_idx + 1)]
+        choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
+        choice_int = int(choice)
+
+        if choice_int <= len(models):
+            generation_model = models[choice_int - 1][0]
+        else:
+            generation_model = click.prompt("Enter model name")
+
+        # Validate the chosen generation model
+        click.echo(f"Validating {generation_model}... ", nl=False)
+        ok, msg = validate_anthropic_generation(anthropic_key, generation_model)
+        if ok:
+            click.echo(f"  {msg}")
+        else:
+            click.echo(f"  {msg}")
+            click.echo("Continuing with selected model anyway.")
+    else:
+        generation_provider = "openai"
+        click.echo("\nUsing OpenAI for generation. Available models:")
+        models = OPENAI_GENERATION_MODELS
+        for i, (name, desc) in enumerate(models, 1):
+            click.echo(f"  [{i}] {name} ({desc})")
+        other_idx = len(models) + 1
+        click.echo(f"  [{other_idx}] Other (enter model name)")
+
+        valid_choices = [str(i) for i in range(1, other_idx + 1)]
+        choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
+        choice_int = int(choice)
+
+        if choice_int <= len(models):
+            generation_model = models[choice_int - 1][0]
+        else:
+            generation_model = click.prompt("Enter model name")
+
+        # Validate the chosen generation model
+        click.echo(f"Validating {generation_model}... ", nl=False)
+        ok, msg = validate_openai_generation(openai_key, generation_model)
+        if ok:
+            click.echo(f"  {msg}")
+        else:
+            click.echo(f"  {msg}")
+            click.echo("Continuing with selected model anyway.")
+
+    # --- Embedding Model ---
+    click.echo("\n--- Embedding Model ---")
+    click.echo("Available embedding models:")
+    for i, (name, desc) in enumerate(EMBEDDING_MODELS, 1):
+        click.echo(f"  [{i}] {name} ({desc})")
+
+    valid_choices = [str(i) for i in range(1, len(EMBEDDING_MODELS) + 1)]
+    choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
+    embedding_model = EMBEDDING_MODELS[int(choice) - 1][0]
+
+    # Validate the chosen embedding model
+    click.echo(f"Validating {embedding_model}... ", nl=False)
+    ok, msg = validate_openai_embedding(openai_key, embedding_model)
+    if ok:
+        click.echo(f"  {msg}")
+    else:
+        click.echo(f"  {msg}")
+        click.echo("Continuing with selected model anyway.")
+
+    return {
+        "openai_key": openai_key,
+        "anthropic_key": anthropic_key,
+        "generation_provider": generation_provider,
+        "generation_model": generation_model,
+        "embedding_model": embedding_model,
+    }
 
 
 def _step3_config(
-    anthropic_key: str | None,
-    openai_key: str | None,
+    llm_config: dict,
 ) -> str:
     """Step 3: Generate encryption key and write .env. Returns the database_url."""
     click.echo("\n Step 3: Configuration\n")
@@ -352,15 +514,16 @@ def _step3_config(
     lines = [
         f"DATABASE_URL={database_url}",
         f"REDIS_URL={redis_url}",
-        f"ANTHROPIC_API_KEY={anthropic_key or ''}",
-        f"OPENAI_API_KEY={openai_key or ''}",
+        f"OPENAI_API_KEY={llm_config.get('openai_key') or ''}",
+        f"ANTHROPIC_API_KEY={llm_config.get('anthropic_key') or ''}",
         f"ENGRAM_ENCRYPTION_KEY={encryption_key}",
+        f"GENERATION_PROVIDER={llm_config.get('generation_provider', 'openai')}",
+        f"GENERATION_MODEL={llm_config.get('generation_model', 'gpt-4.1')}",
         "CHUNK_SIZE_TOKENS=500",
         "CHUNK_OVERLAP_TOKENS=50",
         "MEMORY_DECAY_HALFLIFE_DAYS=365",
-        "EMBEDDING_MODEL=text-embedding-ada-002",
+        f"EMBEDDING_MODEL={llm_config.get('embedding_model', 'text-embedding-3-small')}",
         "EMBEDDING_DIMENSIONS=1536",
-        "LLM_MODEL=claude-sonnet-4-20250514",
         "PHOTO_STORAGE_DIR=~/.engram/photos",
         "SERVER_HOST=0.0.0.0",
         "SERVER_PORT=8000",
@@ -478,10 +641,10 @@ def init():
         return
 
     # Step 2: LLM Providers
-    anthropic_key, openai_key = _step2_llm_providers()
+    llm_config = _step2_llm_providers()
 
     # Step 3: Config
-    database_url = _step3_config(anthropic_key, openai_key)
+    database_url = _step3_config(llm_config)
 
     # Reload settings so downstream code picks up .env
     os.environ.setdefault("DATABASE_URL", database_url)

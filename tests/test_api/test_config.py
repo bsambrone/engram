@@ -21,7 +21,8 @@ async def test_get_config(test_client: AsyncClient):
     assert "memory_decay_halflife_days" in body
     assert "embedding_model" in body
     assert "embedding_dimensions" in body
-    assert "llm_model" in body
+    assert "generation_provider" in body
+    assert "generation_model" in body
     assert "photo_storage_dir" in body
     assert "server_host" in body
     assert "server_port" in body
