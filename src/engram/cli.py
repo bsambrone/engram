@@ -101,6 +101,42 @@ def validate_openai_key(api_key: str) -> tuple[bool, str]:
         return False, f"OpenAI validation failed: {exc}"
 
 
+def fetch_openai_models(api_key: str) -> tuple[list[str], list[str]]:
+    """Fetch available generation and embedding models from the OpenAI API.
+
+    Returns (generation_models, embedding_models).
+    """
+    try:
+        import openai
+
+        client = openai.OpenAI(api_key=api_key)
+        all_models = [m.id for m in client.models.list()]
+
+        # Generation models: gpt-*, o1*, o3*, o4* — exclude realtime/audio/tts/search/transcribe
+        skip_suffixes = (
+            "-realtime", "-audio", "-tts", "-transcribe", "-search", "-diarize",
+        )
+        generation = sorted(
+            m for m in all_models
+            if (m.startswith(("gpt-4", "gpt-5", "o1", "o3", "o4")) or m == "gpt-3.5-turbo")
+            and not any(m.endswith(s) or s[1:] in m for s in skip_suffixes)
+            and "-instruct" not in m
+        )
+        # Prefer base model names (no date suffix) at the top
+        def _sort_key(name: str) -> tuple[int, str]:
+            has_date = any(c.isdigit() for c in name.split("-")[-1]) and len(name.split("-")) > 2
+            return (1 if has_date else 0, name)
+
+        generation.sort(key=_sort_key)
+
+        # Embedding models
+        embedding = sorted(m for m in all_models if "embedding" in m)
+
+        return generation, embedding
+    except Exception:
+        return [], []
+
+
 def validate_openai_generation(api_key: str, model: str) -> tuple[bool, str]:
     """Validate that an OpenAI model works for chat generation.
 
@@ -298,27 +334,9 @@ def _prompt_api_key(
                 return None
 
 
-# OpenAI generation model choices
-OPENAI_GENERATION_MODELS = [
-    ("gpt-5.2", "recommended -- latest, best quality"),
-    ("gpt-4.1", "great quality"),
-    ("gpt-4o", "fast, great quality"),
-    ("gpt-4o-mini", "fastest, good quality, cheapest"),
-    ("o3", "reasoning model -- slowest, highest quality"),
-]
-
-# Anthropic generation model choices
-ANTHROPIC_GENERATION_MODELS = [
-    ("claude-sonnet-4-20250514", "recommended"),
-    ("claude-haiku-4-5-20251001", "fastest"),
-]
-
-# Embedding model choices
-EMBEDDING_MODELS = [
-    ("text-embedding-3-small", "recommended -- good quality, fast"),
-    ("text-embedding-3-large", "best quality, slower"),
-    ("text-embedding-ada-002", "legacy"),
-]
+# Preferred models shown at the top when available (order matters)
+PREFERRED_GENERATION = ["gpt-5.2", "gpt-4.1", "gpt-4o", "gpt-4o-mini", "o3", "o3-mini", "o4-mini"]
+PREFERRED_EMBEDDING = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
 
 
 def _step1_infrastructure() -> bool:
@@ -397,22 +415,39 @@ def _step2_llm_providers() -> dict:
             "embedding_model": "text-embedding-3-small",
         }
 
+    # Fetch available models from the API
+    click.echo("\nFetching available models from OpenAI...")
+    gen_models, emb_models = fetch_openai_models(openai_key)
+
     # --- Generation Model ---
-    click.echo("\nAvailable generation models:")
-    models = OPENAI_GENERATION_MODELS
-    for i, (name, desc) in enumerate(models, 1):
-        click.echo(f"  [{i}] {name} ({desc})")
-    other_idx = len(models) + 1
-    click.echo(f"  [{other_idx}] Other (enter model name)")
+    if gen_models:
+        # Show preferred models first, then the rest
+        ordered = [m for m in PREFERRED_GENERATION if m in gen_models]
+        remaining = [m for m in gen_models if m not in ordered]
+        display_models = ordered + remaining
 
-    valid_choices = [str(i) for i in range(1, other_idx + 1)]
-    choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
-    choice_int = int(choice)
+        click.echo(f"\nAvailable generation models ({len(display_models)} found):")
+        # Show top choices with numbers, truncate long lists
+        show_count = min(len(display_models), 15)
+        for i, name in enumerate(display_models[:show_count], 1):
+            label = " (recommended)" if i == 1 else ""
+            click.echo(f"  [{i}] {name}{label}")
+        if len(display_models) > show_count:
+            click.echo(f"  ... and {len(display_models) - show_count} more")
+        other_idx = show_count + 1
+        click.echo(f"  [{other_idx}] Other (enter model name)")
 
-    if choice_int <= len(models):
-        generation_model = models[choice_int - 1][0]
+        valid_choices = [str(i) for i in range(1, other_idx + 1)]
+        choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
+        choice_int = int(choice)
+
+        if choice_int <= show_count:
+            generation_model = display_models[choice_int - 1]
+        else:
+            generation_model = click.prompt("Enter model name")
     else:
-        generation_model = click.prompt("Enter model name")
+        click.echo("\nCould not fetch models. Enter a model name manually.")
+        generation_model = click.prompt("Generation model", default="gpt-5.2")
 
     click.echo(f"Validating {generation_model}... ", nl=False)
     ok, msg = validate_openai_generation(openai_key, generation_model)
@@ -423,16 +458,23 @@ def _step2_llm_providers() -> dict:
         click.echo("Continuing with selected model anyway.")
 
     # --- Embedding Model ---
-    click.echo("\n--- Embedding Model ---")
-    click.echo("Available embedding models:")
-    for i, (name, desc) in enumerate(EMBEDDING_MODELS, 1):
-        click.echo(f"  [{i}] {name} ({desc})")
+    if emb_models:
+        ordered_emb = [m for m in PREFERRED_EMBEDDING if m in emb_models]
+        remaining_emb = [m for m in emb_models if m not in ordered_emb]
+        display_emb = ordered_emb + remaining_emb
 
-    valid_choices = [str(i) for i in range(1, len(EMBEDDING_MODELS) + 1)]
-    choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
-    embedding_model = EMBEDDING_MODELS[int(choice) - 1][0]
+        click.echo(f"\nAvailable embedding models ({len(display_emb)} found):")
+        for i, name in enumerate(display_emb, 1):
+            label = " (recommended)" if i == 1 else ""
+            click.echo(f"  [{i}] {name}{label}")
 
-    # Validate the chosen embedding model
+        valid_choices = [str(i) for i in range(1, len(display_emb) + 1)]
+        choice = click.prompt("Choice", default="1", type=click.Choice(valid_choices))
+        embedding_model = display_emb[int(choice) - 1]
+    else:
+        click.echo("\nCould not fetch embedding models. Enter a model name manually.")
+        embedding_model = click.prompt("Embedding model", default="text-embedding-3-small")
+
     click.echo(f"Validating {embedding_model}... ", nl=False)
     ok, msg = validate_openai_embedding(openai_key, embedding_model)
     if ok:
