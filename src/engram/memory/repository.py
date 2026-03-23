@@ -53,6 +53,11 @@ class MemoryRepository:
 
     async def create(self, **kwargs) -> Memory:
         """Create a new memory with the given fields."""
+        # Strip timezone info — DB uses TIMESTAMP WITHOUT TIME ZONE
+        if "timestamp" in kwargs and kwargs["timestamp"] is not None:
+            ts = kwargs["timestamp"]
+            if ts.tzinfo is not None:
+                kwargs["timestamp"] = ts.replace(tzinfo=None)
         memory = Memory(**kwargs)
         self.session.add(memory)
         await self.session.flush()
