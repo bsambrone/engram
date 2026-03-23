@@ -8,77 +8,77 @@ from pathlib import Path
 
 from engram.ingestion.parsers.base import RawDocument
 
-# Top-level directory names we recognise in an Instagram export
-_KNOWN_DIRS = (
-    "content",
-    "messages",
-    "your_instagram_activity",
-)
+# The user's display name as it appears in message sender_name fields.
+_USER_DISPLAY_NAME = "Bill Sambrone"
 
 
 class InstagramExportParser:
     """Parse an Instagram JSON data export directory."""
 
+    def __init__(self, user_display_name: str = _USER_DISPLAY_NAME) -> None:
+        self.user_display_name = user_display_name
+
     def validate(self, export_path: Path) -> bool:
         """Check that the path looks like an Instagram export."""
         if not export_path.is_dir():
             return False
-        # Direct child directories
-        for name in _KNOWN_DIRS:
-            if (export_path / name).is_dir():
-                return True
-        # Nested under your_instagram_activity/
         activity_dir = export_path / "your_instagram_activity"
         if activity_dir.is_dir():
-            for name in ("content", "messages"):
+            # Check for media/, comments/, or messages/ under activity dir
+            for name in ("media", "comments", "messages"):
                 if (activity_dir / name).is_dir():
                     return True
         return False
 
     async def parse(self, export_path: Path) -> list[RawDocument]:
-        """Parse posts, stories, and messages from the export."""
+        """Parse posts, comments, and messages from the export."""
         documents: list[RawDocument] = []
-
-        # Resolve the activity root (may or may not have the wrapper dir)
-        roots = [export_path]
         activity_dir = export_path / "your_instagram_activity"
-        if activity_dir.is_dir():
-            roots.append(activity_dir)
 
-        for root in roots:
-            documents.extend(self._parse_content_dir(root / "content"))
-            documents.extend(self._parse_messages_dir(root / "messages"))
+        # Posts: your_instagram_activity/media/posts_1.json, posts_2.json, etc.
+        documents.extend(self._parse_posts_dir(activity_dir / "media"))
+
+        # Comments: your_instagram_activity/comments/post_comments_1.json, etc.
+        documents.extend(self._parse_comments_dir(activity_dir / "comments"))
+
+        # Messages: your_instagram_activity/messages/inbox/*/message_1.json
+        documents.extend(self._parse_messages_dir(activity_dir / "messages"))
 
         return documents
 
     # ------------------------------------------------------------------
-    # Content (posts, stories)
+    # Posts  (your_instagram_activity/media/posts_*.json)
     # ------------------------------------------------------------------
 
-    def _parse_content_dir(self, content_dir: Path) -> list[RawDocument]:
-        if not content_dir.is_dir():
+    def _parse_posts_dir(self, media_dir: Path) -> list[RawDocument]:
+        if not media_dir.is_dir():
             return []
         docs: list[RawDocument] = []
-        for json_file in sorted(content_dir.glob("*.json")):
-            docs.extend(self._parse_content_file(json_file))
+        for json_file in sorted(media_dir.glob("posts_*.json")):
+            docs.extend(self._parse_posts_file(json_file))
         return docs
 
-    def _parse_content_file(self, path: Path) -> list[RawDocument]:
+    def _parse_posts_file(self, path: Path) -> list[RawDocument]:
         data = _load_json(path)
         if not isinstance(data, list):
             return []
 
         docs: list[RawDocument] = []
         for item in data:
-            text = _extract_content_text(item)
-            if not text:
+            # Posts wrap content in media[0].title and media[0].creation_timestamp
+            media_list = item.get("media", [])
+            if not media_list:
                 continue
-            timestamp = _parse_ig_timestamp(item)
+            first_media = media_list[0] if isinstance(media_list, list) and media_list else {}
+            title = _fix_encoding(str(first_media.get("title", "") or "")).strip()
+            if not title:
+                continue
+            timestamp = _parse_creation_timestamp(first_media)
             docs.append(
                 RawDocument(
-                    content=text,
+                    content=title,
                     source="instagram",
-                    source_ref=f"instagram-content-{hash(text)}",
+                    source_ref=first_media.get("uri", f"instagram-post-{hash(title)}"),
                     timestamp=timestamp,
                     authorship="user_authored",
                 )
@@ -86,20 +86,59 @@ class InstagramExportParser:
         return docs
 
     # ------------------------------------------------------------------
-    # Messages
+    # Comments  (your_instagram_activity/comments/post_comments_*.json)
+    # ------------------------------------------------------------------
+
+    def _parse_comments_dir(self, comments_dir: Path) -> list[RawDocument]:
+        if not comments_dir.is_dir():
+            return []
+        docs: list[RawDocument] = []
+        for json_file in sorted(comments_dir.glob("post_comments_*.json")):
+            docs.extend(self._parse_comments_file(json_file))
+        return docs
+
+    def _parse_comments_file(self, path: Path) -> list[RawDocument]:
+        data = _load_json(path)
+        if not isinstance(data, list):
+            return []
+
+        docs: list[RawDocument] = []
+        for item in data:
+            smd = item.get("string_map_data", {})
+            comment_entry = smd.get("Comment", {})
+            text = _fix_encoding(str(comment_entry.get("value", "") or "")).strip()
+            if not text:
+                continue
+            time_entry = smd.get("Time", {})
+            timestamp = _parse_unix_timestamp(time_entry.get("timestamp"))
+            docs.append(
+                RawDocument(
+                    content=text,
+                    source="instagram",
+                    source_ref=f"instagram-comment-{hash(text)}",
+                    timestamp=timestamp,
+                    authorship="user_authored",
+                )
+            )
+        return docs
+
+    # ------------------------------------------------------------------
+    # Messages  (your_instagram_activity/messages/inbox/*/message_*.json)
     # ------------------------------------------------------------------
 
     def _parse_messages_dir(self, messages_dir: Path) -> list[RawDocument]:
         if not messages_dir.is_dir():
             return []
         docs: list[RawDocument] = []
-        inbox_dir = messages_dir / "inbox"
-        if not inbox_dir.is_dir():
-            return []
-        for convo_dir in sorted(inbox_dir.iterdir()):
-            if convo_dir.is_dir():
-                for json_file in sorted(convo_dir.glob("*.json")):
-                    docs.extend(self._parse_message_file(json_file))
+        # Scan both inbox and message_requests
+        for subfolder in ("inbox", "message_requests"):
+            folder = messages_dir / subfolder
+            if not folder.is_dir():
+                continue
+            for convo_dir in sorted(folder.iterdir()):
+                if convo_dir.is_dir():
+                    for json_file in sorted(convo_dir.glob("message_*.json")):
+                        docs.extend(self._parse_message_file(json_file))
         return docs
 
     def _parse_message_file(self, path: Path) -> list[RawDocument]:
@@ -113,18 +152,20 @@ class InstagramExportParser:
 
         docs: list[RawDocument] = []
         for msg in messages:
-            content = _fix_encoding(msg.get("content", ""))
+            content = _fix_encoding(str(msg.get("content", "") or ""))
             if not content.strip():
                 continue
-            sender = _fix_encoding(msg.get("sender_name", ""))
-            timestamp = _parse_ig_timestamp(msg)
+            sender = _fix_encoding(str(msg.get("sender_name", "") or ""))
+            ts_ms = msg.get("timestamp_ms")
+            timestamp = _parse_ms_timestamp(ts_ms)
+            is_user = sender == self.user_display_name
             docs.append(
                 RawDocument(
                     content=content,
                     source="instagram",
                     source_ref=f"instagram-message-{hash(content + sender)}",
                     timestamp=timestamp,
-                    authorship="received",
+                    authorship="user_authored" if is_user else "received",
                 )
             )
         return docs
@@ -153,56 +194,26 @@ def _load_json(path: Path) -> list | dict | None:
         return None
 
 
-def _extract_content_text(item: dict) -> str:
-    """Extract text from an Instagram content item (post or story)."""
-    # Format: { "media": [{ ... }], "title": "caption text" }
-    title = item.get("title", "")
-    if title:
-        return _fix_encoding(str(title)).strip()
-
-    # Alternative: "caption" key
-    caption = item.get("caption", "")
-    if caption:
-        return _fix_encoding(str(caption)).strip()
-
-    # Alternative: "text" key
-    text = item.get("text", "")
-    if text:
-        return _fix_encoding(str(text)).strip()
-
-    return ""
+def _parse_creation_timestamp(item: dict) -> datetime | None:
+    """Parse ``creation_timestamp`` (unix seconds) from a media dict."""
+    return _parse_unix_timestamp(item.get("creation_timestamp"))
 
 
-def _parse_ig_timestamp(item: dict) -> datetime | None:
-    """Parse Instagram's timestamp (unix seconds or ISO string)."""
-    # Try creation_timestamp (unix seconds)
-    ts = item.get("creation_timestamp")
-    if ts is None:
-        ts = item.get("timestamp")
-    if ts is None:
-        ts = item.get("timestamp_ms")
-        if ts is not None:
-            try:
-                return datetime.fromtimestamp(int(ts) / 1000, tz=UTC)
-            except (ValueError, OSError):
-                return None
+def _parse_unix_timestamp(val: int | float | str | None) -> datetime | None:
+    """Convert a unix-seconds value to a datetime."""
+    if val is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(val), tz=UTC)
+    except (ValueError, OSError, TypeError):
+        return None
 
-    if ts is not None:
-        if isinstance(ts, (int, float)):
-            try:
-                return datetime.fromtimestamp(ts, tz=UTC)
-            except (ValueError, OSError):
-                return None
-        if isinstance(ts, str):
-            try:
-                return datetime.fromtimestamp(float(ts), tz=UTC)
-            except ValueError:
-                pass
-            try:
-                dt = datetime.fromisoformat(ts)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=UTC)
-                return dt
-            except ValueError:
-                pass
-    return None
+
+def _parse_ms_timestamp(val: int | float | str | None) -> datetime | None:
+    """Convert a unix-milliseconds value to a datetime."""
+    if val is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(val) / 1000, tz=UTC)
+    except (ValueError, OSError, TypeError):
+        return None
