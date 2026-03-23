@@ -10,18 +10,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 from engram.models.base import Base, TimestampMixin, UUIDMixin
 
 
-class ConnectorConfig(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "connector_configs"
+class DataExport(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "data_exports"
 
-    connector_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    credentials: Mapped[str | None] = mapped_column(Text, nullable=True)  # encrypted
-    status: Mapped[str] = mapped_column(String(20), server_default="inactive")
+    platform: Mapped[str] = mapped_column(String(50), nullable=False)
+    export_path: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), server_default="pending")
 
 
 class IngestionJob(UUIDMixin, Base):
     __tablename__ = "ingestion_jobs"
 
-    connector_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(20), server_default="pending")
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)

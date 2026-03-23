@@ -2,7 +2,7 @@
 
 from engram.models.auth import AccessToken
 from engram.models.base import Base
-from engram.models.connector import ConnectorConfig, IngestionJob
+from engram.models.connector import DataExport, IngestionJob
 from engram.models.identity import (
     Belief,
     BeliefMemory,
@@ -32,7 +32,7 @@ __all__ = [
     "StyleProfile",
     "IdentitySnapshot",
     # connector
-    "ConnectorConfig",
+    "DataExport",
     "IngestionJob",
     # auth
     "AccessToken",
