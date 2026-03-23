@@ -273,6 +273,31 @@ async def _verify_tables(database_url: str) -> bool:
         await engine.dispose()
 
 
+async def _list_pending_exports(database_url: str) -> list[dict]:
+    """Return a list of dicts for all registered DataExport rows."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from engram.models.connector import DataExport
+
+    engine = create_async_engine(database_url, echo=False)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            result = await session.execute(select(DataExport))
+            rows = result.scalars().all()
+            return [
+                {
+                    "platform": r.platform,
+                    "export_path": r.export_path,
+                    "status": r.status,
+                }
+                for r in rows
+            ]
+    finally:
+        await engine.dispose()
+
+
 async def _verify_health(host: str, port: int) -> bool:
     """Quick HTTP check against the health endpoint."""
     import httpx
@@ -321,7 +346,27 @@ def mcp():
 @cli.command()
 def ingest():
     """Run data ingestion from configured exports."""
-    click.echo("Ingestion not yet implemented. Coming in a later task.")
+    click.echo("Processing registered data exports...")
+
+    database_url = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+asyncpg://postgres:postgres@localhost:5433/engram",
+    )
+
+    try:
+        exports = asyncio.run(_list_pending_exports(database_url))
+    except Exception as exc:
+        click.echo(f"Error querying exports: {exc}")
+        return
+
+    if not exports:
+        click.echo("No pending data exports found. Use 'engram init' to configure data sources.")
+        return
+
+    for exp in exports:
+        click.echo(f"  [{exp['platform']}] {exp['export_path']} (status: {exp['status']})")
+
+    click.echo(f"\n{len(exports)} export(s) registered.")
 
 
 @cli.command()
@@ -557,9 +602,173 @@ def _step3_config(
     return database_url
 
 
-def _step4_database() -> bool:
-    """Step 4: Run Alembic migrations. Returns True on success."""
-    click.echo("\n Step 4: Database Setup\n")
+def _step4_data_sources(database_url: str) -> int:
+    """Step 4: Data Export Setup. Returns the number of sources configured."""
+    click.echo("\n Step 4: Data Sources\n")
+
+    platforms = {
+        "1": {
+            "name": "Gmail",
+            "label": "Gmail (Google Takeout)",
+            "parser_cls": "GmailExportParser",
+            "parser_module": "engram.ingestion.parsers.gmail",
+            "platform_key": "gmail",
+            "instructions": (
+                "To export your Gmail data:\n"
+                "  1. Go to https://takeout.google.com\n"
+                "  2. Deselect all, then select only \"Mail\"\n"
+                "  3. Choose .mbox format\n"
+                "  4. Click \"Create export\" and wait for email\n"
+                "  5. Download and extract the ZIP archive"
+            ),
+            "success_hint": "MBOX files detected",
+        },
+        "2": {
+            "name": "Reddit",
+            "label": "Reddit (Data Request)",
+            "parser_cls": "RedditExportParser",
+            "parser_module": "engram.ingestion.parsers.reddit",
+            "platform_key": "reddit",
+            "instructions": (
+                "To export your Reddit data:\n"
+                "  1. Go to https://www.reddit.com/settings/data-request\n"
+                "  2. Click \"Request data\"\n"
+                "  3. Wait for the email (can take up to 30 days)\n"
+                "  4. Download and extract the archive"
+            ),
+            "success_hint": "posts.json detected",
+        },
+        "3": {
+            "name": "Facebook",
+            "label": "Facebook (Download Your Information)",
+            "parser_cls": "FacebookExportParser",
+            "parser_module": "engram.ingestion.parsers.facebook",
+            "platform_key": "facebook",
+            "instructions": (
+                "To export your Facebook data:\n"
+                "  1. Go to Facebook Settings > Your Information > Download Your Information\n"
+                "  2. Select format: JSON\n"
+                "  3. Select data to include (Posts, Comments, Messages recommended)\n"
+                "  4. Click \"Request Download\" and wait for notification\n"
+                "  5. Download and extract the archive"
+            ),
+            "success_hint": "posts/comments/messages directories detected",
+        },
+        "4": {
+            "name": "Instagram",
+            "label": "Instagram (Download Your Data)",
+            "parser_cls": "InstagramExportParser",
+            "parser_module": "engram.ingestion.parsers.instagram",
+            "platform_key": "instagram",
+            "instructions": (
+                "To export your Instagram data:\n"
+                "  1. Go to Instagram Settings > Privacy and Security > Download Your Data\n"
+                "  2. Select format: JSON\n"
+                "  3. Click \"Request Download\" and wait for email\n"
+                "  4. Download and extract the archive"
+            ),
+            "success_hint": "content/messages directories detected",
+        },
+    }
+
+    click.echo("Which platforms do you have data to import?")
+    for key, info in platforms.items():
+        click.echo(f"  [{key}] {info['label']}")
+    click.echo("  [5] Skip for now")
+    click.echo("")
+
+    raw = click.prompt("Select platforms (comma-separated, e.g. 1,2,3)", default="5")
+    selections = [s.strip() for s in raw.split(",")]
+
+    if "5" in selections or not any(s in platforms for s in selections):
+        click.echo("\nSkipping data source setup.")
+        return 0
+
+    configured = 0
+    for sel in selections:
+        if sel not in platforms:
+            continue
+        info = platforms[sel]
+        click.echo(f"\n--- {info['name']} ---")
+        click.echo(info["instructions"])
+        click.echo("")
+
+        export_path_str = click.prompt(
+            f"Enter path to your {info['name']} export (or press Enter to skip)",
+            default="",
+            show_default=False,
+        )
+        if not export_path_str:
+            click.echo(f"Skipping {info['name']}.")
+            continue
+
+        export_path = Path(export_path_str).expanduser().resolve()
+
+        # Dynamically import and instantiate the parser
+        import importlib
+
+        mod = importlib.import_module(info["parser_module"])
+        parser = getattr(mod, info["parser_cls"])()
+
+        click.echo("Validating... ", nl=False)
+        if parser.validate(export_path):
+            click.echo(
+                f"Found valid {info['name']} export ({info['success_hint']})"
+            )
+            # Register the export in the database
+            try:
+                asyncio.run(
+                    _register_data_export(
+                        database_url, info["platform_key"], str(export_path)
+                    )
+                )
+                configured += 1
+            except Exception as exc:
+                click.echo(f"  Warning: could not register export: {exc}")
+                click.echo("  You can register it later with 'engram ingest'.")
+        else:
+            click.echo(
+                f"Could not validate {info['name']} export at {export_path}"
+            )
+            if click.confirm("Register anyway?", default=False):
+                try:
+                    asyncio.run(
+                        _register_data_export(
+                            database_url, info["platform_key"], str(export_path)
+                        )
+                    )
+                    configured += 1
+                except Exception as exc:
+                    click.echo(f"  Warning: could not register export: {exc}")
+
+    click.echo(f"\n{configured} data source(s) configured")
+    return configured
+
+
+async def _register_data_export(
+    database_url: str, platform: str, export_path: str
+) -> None:
+    """Create a DataExport row for a validated export directory."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from engram.models.connector import DataExport
+
+    engine = create_async_engine(database_url, echo=False)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            export = DataExport(
+                platform=platform, export_path=export_path, status="pending"
+            )
+            session.add(export)
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+def _step5_database() -> bool:
+    """Step 5: Run Alembic migrations. Returns True on success."""
+    click.echo("\n Step 5: Database Setup\n")
     click.echo("Running database migrations...")
 
     result = subprocess.run(
@@ -585,9 +794,9 @@ def _step4_database() -> bool:
     return True
 
 
-def _step5_identity(database_url: str) -> None:
-    """Step 5: Create identity profile."""
-    click.echo("\n Step 5: Identity Profile\n")
+def _step6_identity(database_url: str) -> None:
+    """Step 6: Create identity profile."""
+    click.echo("\n Step 6: Identity Profile\n")
 
     name = click.prompt("What's your name?")
     description = click.prompt("Description (optional)", default="", show_default=False)
@@ -601,9 +810,9 @@ def _step5_identity(database_url: str) -> None:
         click.echo(f"\n  Failed to create identity profile: {exc}")
 
 
-def _step6_token(database_url: str) -> None:
-    """Step 6: Generate and store owner access token."""
-    click.echo("\n Step 6: Access Token\n")
+def _step7_token(database_url: str) -> None:
+    """Step 7: Generate and store owner access token."""
+    click.echo("\n Step 7: Access Token\n")
     click.echo("Generating your owner access token...\n")
 
     raw_token = "engram_" + secrets.token_urlsafe(32)
@@ -625,9 +834,9 @@ def _step6_token(database_url: str) -> None:
     click.echo("  Token saved. Use this to authenticate API requests.")
 
 
-def _step7_verify() -> None:
-    """Step 7: Verification checks."""
-    click.echo("\n Step 7: Verification\n")
+def _step8_verify() -> None:
+    """Step 8: Verification checks."""
+    click.echo("\n Step 8: Verification\n")
     click.echo("Testing engram...")
 
     database_url = "postgresql+asyncpg://postgres:postgres@localhost:5433/engram"
@@ -668,16 +877,19 @@ def init():
     # Reload settings so downstream code picks up .env
     os.environ.setdefault("DATABASE_URL", database_url)
 
-    # Step 4: Database migration
-    if not _step4_database():
+    # Step 4: Data Sources
+    _step4_data_sources(database_url)
+
+    # Step 5: Database migration
+    if not _step5_database():
         click.echo("Database setup failed. Please fix the issues above and try again.")
         return
 
-    # Step 5: Identity profile
-    _step5_identity(database_url)
+    # Step 6: Identity profile
+    _step6_identity(database_url)
 
-    # Step 6: Access token
-    _step6_token(database_url)
+    # Step 7: Access token
+    _step7_token(database_url)
 
-    # Step 7: Verify
-    _step7_verify()
+    # Step 8: Verify
+    _step8_verify()

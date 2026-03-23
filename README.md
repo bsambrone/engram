@@ -54,6 +54,40 @@ engram ingest      # Run data ingestion
 engram status      # Show engram statistics
 ```
 
+## Data Sources
+
+Engram can import your personal data from several platforms. The `engram init` wizard will guide you through downloading and configuring each export.
+
+### Gmail (Google Takeout)
+
+1. Go to https://takeout.google.com
+2. Deselect all, then select only "Mail"
+3. Choose .mbox format
+4. Click "Create export" and wait for the email
+5. Download and extract the ZIP archive
+
+### Reddit (Data Request)
+
+1. Go to https://www.reddit.com/settings/data-request
+2. Click "Request data"
+3. Wait for the email (can take up to 30 days)
+4. Download and extract the archive
+
+### Facebook (Download Your Information)
+
+1. Go to Facebook Settings > Your Information > Download Your Information
+2. Select format: JSON
+3. Select data to include (Posts, Comments, Messages recommended)
+4. Click "Request Download" and wait for notification
+5. Download and extract the archive
+
+### Instagram (Download Your Data)
+
+1. Go to Instagram Settings > Privacy and Security > Download Your Data
+2. Select format: JSON
+3. Click "Request Download" and wait for email
+4. Download and extract the archive
+
 ## Development
 
 ```bash
