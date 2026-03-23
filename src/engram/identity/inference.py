@@ -41,7 +41,7 @@ async def run_inference(session: AsyncSession, profile_id: uuid.UUID) -> dict:
     # Get recent high-importance user-authored memories
     stmt = (
         select(Memory)
-        .where(Memory.authorship == "user")
+        .where(Memory.authorship == "user_authored")
         .where(Memory.status == "active")
         .where(Memory.importance_score.isnot(None))
         .order_by(Memory.importance_score.desc())

@@ -37,7 +37,7 @@ async def _seed_memories(session: AsyncSession, count: int = 5) -> None:
             embedding=DETERMINISTIC_EMBEDDING,
             source="file",
             source_ref=f"identity-seed-{i}.txt",
-            authorship="user",
+            authorship="user_authored",
             importance_score=0.8,
             confidence=1.0,
             status="active",
@@ -164,7 +164,14 @@ async def test_inference_creates_style_profile(mock_generate, db_session: AsyncS
 async def test_inference_no_memories_returns_early(
     mock_generate, db_session: AsyncSession
 ):
-    """run_inference returns early when there are no memories to analyze."""
+    """run_inference returns early when there are no user-authored memories."""
+    from sqlalchemy import delete
+    from engram.models.memory import Memory
+
+    # Clear any memories left by prior tests
+    await db_session.execute(delete(Memory))
+    await db_session.flush()
+
     identity_svc = IdentityService(db_session)
     profile = await identity_svc.get_or_create_default_profile()
 

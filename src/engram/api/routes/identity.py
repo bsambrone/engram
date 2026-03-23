@@ -346,6 +346,7 @@ async def trigger_inference(
 
     profile_id = await _get_profile_id(session)
     result = await run_inference(session, profile_id)
+    await session.commit()
     return result
 
 
