@@ -313,7 +313,9 @@ def server():
 @cli.command()
 def mcp():
     """Start the MCP server."""
-    click.echo("MCP server not yet implemented. Coming in a later task.")
+    from engram.mcp.server import main as mcp_main
+
+    asyncio.run(mcp_main())
 
 
 @cli.command()

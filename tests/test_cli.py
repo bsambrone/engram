@@ -25,12 +25,13 @@ def test_server_command_exists():
     assert "Start the FastAPI REST API server" in result.output
 
 
-def test_mcp_command_stub():
-    """Verify engram mcp prints stub message."""
+def test_mcp_command_calls_server():
+    """Verify engram mcp calls the MCP server main function."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["mcp"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output
+    with patch("engram.cli.asyncio") as mock_asyncio:
+        result = runner.invoke(cli, ["mcp"])
+        assert result.exit_code == 0
+        mock_asyncio.run.assert_called_once()
 
 
 def test_ingest_command_stub():
