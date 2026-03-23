@@ -45,14 +45,14 @@ class GmailExportParser:
 
     def _parse_message(self, msg: mailbox.mboxMessage) -> RawDocument | None:
         """Parse a single email message into a RawDocument."""
-        from_addr = msg.get("From", "").lower()
-        subject = msg.get("Subject", "")
-        date_str = msg.get("Date", "")
-        message_id = msg.get("Message-ID", "")
+        from_addr = str(msg.get("From") or "").lower()
+        subject = str(msg.get("Subject") or "")
+        date_str = str(msg.get("Date") or "")
+        message_id = str(msg.get("Message-ID") or "")
 
         # Parse timestamp
         try:
-            timestamp = parsedate_to_datetime(date_str)
+            timestamp = parsedate_to_datetime(str(date_str))
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
         except Exception:
@@ -82,28 +82,34 @@ class GmailExportParser:
             images=images,
         )
 
+    @staticmethod
+    def _safe_decode(payload: bytes, charset: str | None) -> str:
+        """Decode payload with fallback for malformed charset values."""
+        if charset:
+            # Strip any garbage from charset string
+            charset = charset.strip().split()[0]
+        try:
+            return payload.decode(charset or "utf-8", errors="replace")
+        except (LookupError, UnicodeDecodeError):
+            return payload.decode("utf-8", errors="replace")
+
     def _extract_body(self, msg: mailbox.mboxMessage) -> str:
         """Extract plain text body from email message."""
         if msg.is_multipart():
-            # Try plain text first
             for part in msg.walk():
                 if part.get_content_type() == "text/plain":
                     payload = part.get_payload(decode=True)
                     if payload:
-                        charset = part.get_content_charset() or "utf-8"
-                        return payload.decode(charset, errors="replace")
-            # Fallback to HTML if no plain text
+                        return self._safe_decode(payload, part.get_content_charset())
             for part in msg.walk():
                 if part.get_content_type() == "text/html":
                     payload = part.get_payload(decode=True)
                     if payload:
-                        charset = part.get_content_charset() or "utf-8"
-                        return payload.decode(charset, errors="replace")
+                        return self._safe_decode(payload, part.get_content_charset())
         else:
             payload = msg.get_payload(decode=True)
             if payload:
-                charset = msg.get_content_charset() or "utf-8"
-                return payload.decode(charset, errors="replace")
+                return self._safe_decode(payload, msg.get_content_charset())
         return ""
 
     def _extract_images(self, msg: mailbox.mboxMessage) -> list[bytes]:
