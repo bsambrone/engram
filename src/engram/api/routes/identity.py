@@ -1,8 +1,9 @@
-"""Identity API routes — beliefs, preferences, style, inference, snapshots."""
+"""Identity API routes — beliefs, preferences, style, inference, snapshots, timeline."""
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -113,6 +114,19 @@ class StyleUpdate(BaseModel):
     communication_patterns: str | None = None
 
 
+class TimelineEntry(BaseModel):
+    id: uuid.UUID
+    topic: str
+    stance: str | None = None
+    nuance: str | None = None
+    confidence: float | None = None
+    source: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class SnapshotCreate(BaseModel):
     label: str | None = None
 
@@ -173,13 +187,23 @@ async def update_profile(
 @router.get("/beliefs")
 async def list_beliefs(
     topic: str | None = Query(None),
+    as_of_date: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
     token: AccessToken = Depends(get_current_token),
 ):
-    """List beliefs. Shared tokens get no source field; owner tokens get full output."""
+    """List beliefs. Shared tokens get no source field; owner tokens get full output.
+
+    Optional as_of_date filters beliefs to those active on that date (ISO 8601).
+    """
     profile_id = await _get_profile_id(session)
     repo = IdentityRepository(session)
-    beliefs = await repo.list_beliefs(profile_id, topic=topic)
+    parsed_date = None
+    if as_of_date:
+        try:
+            parsed_date = datetime.fromisoformat(as_of_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid as_of_date format. Use ISO 8601.")
+    beliefs = await repo.list_beliefs(profile_id, topic=topic, as_of_date=parsed_date)
     if token.access_level == "owner":
         return [BeliefOut.model_validate(b).model_dump() for b in beliefs]
     return [BeliefSharedOut.model_validate(b).model_dump() for b in beliefs]
@@ -412,3 +436,52 @@ async def get_snapshot(
         label=snapshot.label,
         created_at=snapshot.created_at.isoformat() if snapshot.created_at else None,
     )
+
+
+# ---- Timeline routes ---------------------------------------------------------
+
+
+@router.get("/timeline", response_model=list[TimelineEntry])
+async def get_belief_timeline(
+    topic: str = Query(...),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+    _owner: AccessToken = Depends(require_owner),
+):
+    """Return the evolution of a belief over time for a given topic (owner only).
+
+    Each entry includes stance, confidence, valid_from, and valid_until.
+    """
+    profile_id = await _get_profile_id(session)
+    repo = IdentityRepository(session)
+
+    parsed_start = None
+    parsed_end = None
+    if start:
+        try:
+            parsed_start = datetime.fromisoformat(start)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start date. Use ISO 8601.")
+    if end:
+        try:
+            parsed_end = datetime.fromisoformat(end)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end date. Use ISO 8601.")
+
+    beliefs = await repo.get_belief_timeline(
+        profile_id, topic=topic, start=parsed_start, end=parsed_end
+    )
+    return [
+        TimelineEntry(
+            id=b.id,
+            topic=b.topic,
+            stance=b.stance,
+            nuance=b.nuance,
+            confidence=b.confidence,
+            source=b.source,
+            valid_from=b.valid_from.isoformat() if b.valid_from else None,
+            valid_until=b.valid_until.isoformat() if b.valid_until else None,
+        )
+        for b in beliefs
+    ]

@@ -101,6 +101,7 @@ class MemoryRepository:
         person: str | None = None,
         source: str | None = None,
         visibility: str | None = None,
+        before_date: datetime | None = None,
     ) -> list[Memory]:
         """Vector search with optional filters and composite re-ranking.
 
@@ -127,6 +128,8 @@ class MemoryRepository:
             stmt = stmt.where(Memory.source == source)
         if visibility:
             stmt = stmt.where(Memory.visibility == visibility)
+        if before_date:
+            stmt = stmt.where(Memory.timestamp <= before_date)
 
         stmt = stmt.order_by(distance).limit(fetch_limit)
 

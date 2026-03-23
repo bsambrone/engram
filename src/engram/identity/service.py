@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,11 +22,18 @@ class IdentityService:
             return profile
         return await self.repo.create_profile(name="default")
 
-    async def get_full_identity(self, profile_id: uuid.UUID) -> dict:
-        """Return a dict with beliefs, preferences, and style for a profile."""
-        beliefs = await self.repo.list_beliefs(profile_id)
-        preferences = await self.repo.list_preferences(profile_id)
-        style = await self.repo.get_style(profile_id)
+    async def get_full_identity(
+        self,
+        profile_id: uuid.UUID,
+        as_of_date: datetime | None = None,
+    ) -> dict:
+        """Return a dict with beliefs, preferences, and style for a profile.
+
+        If as_of_date is provided, returns the identity as it was on that date.
+        """
+        beliefs = await self.repo.list_beliefs(profile_id, as_of_date=as_of_date)
+        preferences = await self.repo.list_preferences(profile_id, as_of_date=as_of_date)
+        style = await self.repo.get_style(profile_id, as_of_date=as_of_date)
 
         return {
             "beliefs": [
@@ -36,6 +44,8 @@ class IdentityService:
                     "nuance": b.nuance,
                     "confidence": b.confidence,
                     "source": b.source,
+                    "valid_from": b.valid_from.isoformat() if b.valid_from else None,
+                    "valid_until": b.valid_until.isoformat() if b.valid_until else None,
                 }
                 for b in beliefs
             ],
@@ -46,6 +56,8 @@ class IdentityService:
                     "value": p.value,
                     "strength": p.strength,
                     "source": p.source,
+                    "valid_from": p.valid_from.isoformat() if p.valid_from else None,
+                    "valid_until": p.valid_until.isoformat() if p.valid_until else None,
                 }
                 for p in preferences
             ],

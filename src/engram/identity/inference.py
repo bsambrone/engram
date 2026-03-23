@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from engram.identity.repository import IdentityRepository
+from engram.identity.service import IdentityService
 from engram.llm.providers import generate
 from engram.models.memory import Memory
 
@@ -67,8 +69,9 @@ async def run_inference(session: AsyncSession, profile_id: uuid.UUID) -> dict:
         return {"status": "parse_error", "extracted": 0}
 
     extracted = 0
+    now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
 
-    # Create/update inferred beliefs (never overwrite source="user")
+    # Create/update inferred beliefs using evolve pattern (never overwrite source="user")
     for belief_data in data.get("beliefs", []):
         topic = belief_data.get("topic", "")
         if not topic:
@@ -78,15 +81,28 @@ async def run_inference(session: AsyncSession, profile_id: uuid.UUID) -> dict:
         user_beliefs = [b for b in existing if b.source == "user"]
         if user_beliefs:
             continue  # Don't overwrite user-sourced beliefs
-        # Check for existing inferred belief on this topic to update
+        # Check for existing inferred belief on this topic
         inferred = [b for b in existing if b.source == "inferred"]
         if inferred:
-            await repo.update_belief(
-                inferred[0].id,
-                stance=belief_data.get("stance"),
-                nuance=belief_data.get("nuance"),
-                confidence=belief_data.get("confidence"),
-            )
+            old_belief = inferred[0]
+            new_stance = belief_data.get("stance")
+            # Only evolve if the stance actually changed
+            if new_stance and new_stance != old_belief.stance:
+                await repo.evolve_belief(
+                    old_belief.id,
+                    new_stance=new_stance,
+                    new_nuance=belief_data.get("nuance"),
+                    new_confidence=belief_data.get("confidence"),
+                )
+            else:
+                # Stance unchanged — just update confidence if different
+                new_confidence = belief_data.get("confidence")
+                if new_confidence is not None and new_confidence != old_belief.confidence:
+                    await repo.update_belief(
+                        old_belief.id,
+                        confidence=new_confidence,
+                        last_updated=now,
+                    )
         else:
             await repo.create_belief(
                 profile_id,
@@ -95,10 +111,12 @@ async def run_inference(session: AsyncSession, profile_id: uuid.UUID) -> dict:
                 nuance=belief_data.get("nuance"),
                 confidence=belief_data.get("confidence"),
                 source="inferred",
+                valid_from=now,
+                valid_until=None,
             )
         extracted += 1
 
-    # Create/update inferred preferences
+    # Create/update inferred preferences using evolve pattern
     for pref_data in data.get("preferences", []):
         category = pref_data.get("category", "")
         if not category:
@@ -109,11 +127,20 @@ async def run_inference(session: AsyncSession, profile_id: uuid.UUID) -> dict:
             continue
         inferred_prefs = [p for p in existing if p.source == "inferred" and p.category == category]
         if inferred_prefs:
-            await repo.update_preference(
-                inferred_prefs[0].id,
-                value=pref_data.get("value"),
-                strength=pref_data.get("strength"),
-            )
+            old_pref = inferred_prefs[0]
+            new_value = pref_data.get("value")
+            # Only evolve if the value actually changed
+            if new_value and new_value != old_pref.value:
+                await repo.evolve_preference(
+                    old_pref.id,
+                    new_value=new_value,
+                    new_strength=pref_data.get("strength"),
+                )
+            else:
+                # Value unchanged — just update strength if different
+                new_strength = pref_data.get("strength")
+                if new_strength is not None and new_strength != old_pref.strength:
+                    await repo.update_preference(old_pref.id, strength=new_strength)
         else:
             await repo.create_preference(
                 profile_id,
@@ -121,6 +148,8 @@ async def run_inference(session: AsyncSession, profile_id: uuid.UUID) -> dict:
                 value=pref_data.get("value"),
                 strength=pref_data.get("strength"),
                 source="inferred",
+                valid_from=now,
+                valid_until=None,
             )
         extracted += 1
 
@@ -140,5 +169,12 @@ async def run_inference(session: AsyncSession, profile_id: uuid.UUID) -> dict:
                 source="inferred",
             )
             extracted += 1
+
+    # Auto-snapshot after inference
+    svc = IdentityService(session)
+    await svc.take_snapshot(
+        profile_id,
+        label=f"auto-{now.strftime('%Y-%m-%dT%H:%M')}",
+    )
 
     return {"status": "ok", "extracted": extracted}

@@ -31,6 +31,7 @@ router = APIRouter(prefix="/engram", tags=["engram"])
 
 class AskRequest(BaseModel):
     query: str
+    as_of_date: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -207,7 +208,13 @@ async def ask(
 ):
     """Ask the engram a question. Owner gets citations, shared doesn't."""
     is_owner = token.access_level == "owner"
-    result = await ask_engram(session, body.query, is_owner=is_owner)
+    parsed_date = None
+    if body.as_of_date:
+        try:
+            parsed_date = datetime.fromisoformat(body.as_of_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid as_of_date format. Use ISO 8601.")
+    result = await ask_engram(session, body.query, is_owner=is_owner, as_of_date=parsed_date)
     return AskResponse(
         answer=result.answer,
         confidence=result.confidence,

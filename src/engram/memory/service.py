@@ -78,6 +78,7 @@ class MemoryService:
         topic: str | None = None,
         person: str | None = None,
         source: str | None = None,
+        before_date: datetime | None = None,
     ) -> list:
         """Search memories with composite ranking."""
         return await self.repo.search(
@@ -87,6 +88,7 @@ class MemoryService:
             topic=topic,
             person=person,
             source=source,
+            before_date=before_date,
         )
 
     async def reinforce(self, memory_id: uuid.UUID, evidence: str | None = None) -> dict:

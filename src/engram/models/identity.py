@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,6 +60,8 @@ class Belief(UUIDMixin, TimestampMixin, Base):
     source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     first_seen: Mapped[datetime | None] = mapped_column(nullable=True)
     last_updated: Mapped[datetime | None] = mapped_column(nullable=True)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     profile: Mapped["IdentityProfile"] = relationship(back_populates="beliefs")
     supporting_memories: Mapped[list["Memory"]] = relationship(  # noqa: F821
@@ -77,6 +79,8 @@ class Preference(UUIDMixin, TimestampMixin, Base):
     value: Mapped[str | None] = mapped_column(Text, nullable=True)
     strength: Mapped[float | None] = mapped_column(nullable=True)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     profile: Mapped["IdentityProfile"] = relationship(back_populates="preferences")
     supporting_memories: Mapped[list["Memory"]] = relationship(  # noqa: F821
@@ -97,6 +101,8 @@ class StyleProfile(UUIDMixin, TimestampMixin, Base):
     vocabulary_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     communication_patterns: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     profile: Mapped["IdentityProfile"] = relationship(back_populates="style_profile")
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,7 @@ def build_prompt(
     preferences: list[dict],
     style: dict | None,
     memories: list[dict],
+    as_of_date: datetime | None = None,
 ) -> str:
     """Build the system prompt that makes the LLM respond as the person.
 
@@ -37,13 +39,20 @@ def build_prompt(
     """
     sections = []
 
-    sections.append(
+    base_instruction = (
         f"You are the digital engram of {name}. "
         "Respond as this person would, based on their memories, beliefs, "
         "preferences, and communication style. "
         "Stay faithful to the data provided. If the data is insufficient, "
         "say so rather than fabricating."
     )
+    if as_of_date:
+        base_instruction += (
+            f"\n\nIMPORTANT: Respond as this person would have on "
+            f"{as_of_date.strftime('%Y-%m-%d')}. Only use beliefs, preferences, "
+            f"and memories from that date or earlier."
+        )
+    sections.append(base_instruction)
 
     # Beliefs
     if beliefs:
@@ -102,20 +111,24 @@ async def ask_engram(
     query: str,
     *,
     is_owner: bool = True,
+    as_of_date: datetime | None = None,
 ) -> EngramResponse:
     """Full RAG pipeline: embed -> search -> identity -> prompt -> generate."""
     identity_svc = IdentityService(session)
     memory_svc = MemoryService(session)
 
     profile = await identity_svc.get_or_create_default_profile()
-    identity = await identity_svc.get_full_identity(profile.id)
+    identity = await identity_svc.get_full_identity(profile.id, as_of_date=as_of_date)
 
     # Embed query and search memories
     query_embeddings = await embed_texts([query])
     # Owner sees active + private; shared sees only active
     visibility = None if is_owner else "active"
     memories = await memory_svc.remember(
-        query_embeddings[0], limit=15, visibility=visibility
+        query_embeddings[0],
+        limit=15,
+        visibility=visibility,
+        before_date=as_of_date,
     )
 
     memory_dicts = [
@@ -134,6 +147,7 @@ async def ask_engram(
         preferences=identity["preferences"],
         style=identity["style"],
         memories=memory_dicts,
+        as_of_date=as_of_date,
     )
 
     answer = await generate(system=system_prompt, user=query)
