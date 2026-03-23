@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: bd5742f77030
+Revision ID: 658018bb07cc
 Revises: 
-Create Date: 2026-03-22 15:43:11.698124
+Create Date: 2026-03-22 17:01:22.015466
 
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'bd5742f77030'
+revision: str = '658018bb07cc'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -32,10 +32,10 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('token_hash')
     )
-    op.create_table('connector_configs',
-    sa.Column('connector_type', sa.String(length=50), nullable=False),
-    sa.Column('credentials', sa.Text(), nullable=True),
-    sa.Column('status', sa.String(length=20), server_default='inactive', nullable=False),
+    op.create_table('data_exports',
+    sa.Column('platform', sa.String(length=50), nullable=False),
+    sa.Column('export_path', sa.Text(), nullable=False),
+    sa.Column('status', sa.String(length=20), server_default='pending', nullable=False),
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
@@ -50,7 +50,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('ingestion_jobs',
-    sa.Column('connector_type', sa.String(length=50), nullable=False),
+    sa.Column('source_type', sa.String(length=50), nullable=False),
     sa.Column('status', sa.String(length=20), server_default='pending', nullable=False),
     sa.Column('started_at', sa.DateTime(), nullable=True),
     sa.Column('completed_at', sa.DateTime(), nullable=True),
@@ -218,6 +218,6 @@ def downgrade() -> None:
     op.drop_table('memories')
     op.drop_table('ingestion_jobs')
     op.drop_table('identity_profiles')
-    op.drop_table('connector_configs')
+    op.drop_table('data_exports')
     op.drop_table('access_tokens')
     # ### end Alembic commands ###
