@@ -84,6 +84,17 @@ class CompareResponse(BaseModel):
     analysis: str
 
 
+class ImagineRequest(BaseModel):
+    scenario: str
+    style: str | None = None
+
+
+class ImagineResponse(BaseModel):
+    id: str
+    file_path: str
+    scenario: str
+
+
 class ExplainBeliefResponse(BaseModel):
     belief_id: str
     topic: str
@@ -304,3 +315,18 @@ async def explain_belief(
         source=belief_with_memories.source,
         supporting_memory_ids=[str(m.id) for m in belief_with_memories.supporting_memories],
     )
+
+
+@router.post("/imagine", response_model=ImagineResponse)
+async def imagine(
+    body: ImagineRequest,
+    session: AsyncSession = Depends(get_session),
+    _owner: AccessToken = Depends(require_owner),
+):
+    """Generate an image from a scenario description."""
+    from engram.photos.service import PhotoService
+
+    service = PhotoService(session)
+    result = await service.imagine(scenario=body.scenario, style=body.style)
+    await session.commit()
+    return ImagineResponse(**result)
