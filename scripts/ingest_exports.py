@@ -115,7 +115,7 @@ async def ingest_photos(photo_paths: list[Path], engine):
     for i, photo_path in enumerate(photo_paths):
         try:
             async with factory() as session:
-                photo_service = PhotoService(session, settings.photo_storage_dir)
+                photo_service = PhotoService(session)
                 content = photo_path.read_bytes()
                 photo = await photo_service.upload_photo(
                     file_content=content,
