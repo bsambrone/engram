@@ -8,27 +8,23 @@ from pathlib import Path
 
 from engram.ingestion.parsers.base import RawDocument
 
-# Top-level directory names we recognise in a Facebook export
-_KNOWN_DIRS = (
-    "posts",
-    "messages",
-    "comments_and_reactions",
-    "your_facebook_activity",
-)
+# The user's display name as it appears in message sender_name fields.
+_USER_DISPLAY_NAME = "Bill Sambrone"
 
 
 class FacebookExportParser:
     """Parse a Facebook JSON data export directory."""
 
+    def __init__(self, user_display_name: str = _USER_DISPLAY_NAME) -> None:
+        self.user_display_name = user_display_name
+
     def validate(self, export_path: Path) -> bool:
-        """Check that the path looks like a Facebook export."""
+        """Check that the path looks like a Facebook export.
+
+        Accepts the export root which contains ``your_facebook_activity/``.
+        """
         if not export_path.is_dir():
             return False
-        # Direct child directories
-        for name in _KNOWN_DIRS:
-            if (export_path / name).is_dir():
-                return True
-        # Nested under your_facebook_activity/
         activity_dir = export_path / "your_facebook_activity"
         if activity_dir.is_dir():
             for name in ("posts", "messages", "comments_and_reactions"):
@@ -39,17 +35,11 @@ class FacebookExportParser:
     async def parse(self, export_path: Path) -> list[RawDocument]:
         """Parse posts, comments, and messages from the export."""
         documents: list[RawDocument] = []
-
-        # Resolve the activity root (may or may not have the wrapper dir)
-        roots = [export_path]
         activity_dir = export_path / "your_facebook_activity"
-        if activity_dir.is_dir():
-            roots.append(activity_dir)
 
-        for root in roots:
-            documents.extend(self._parse_posts_dir(root / "posts"))
-            documents.extend(self._parse_comments_dir(root / "comments_and_reactions"))
-            documents.extend(self._parse_messages_dir(root / "messages"))
+        documents.extend(self._parse_posts_dir(activity_dir / "posts"))
+        documents.extend(self._parse_comments_dir(activity_dir / "comments_and_reactions"))
+        documents.extend(self._parse_messages_dir(activity_dir / "messages"))
 
         return documents
 
@@ -72,15 +62,11 @@ class FacebookExportParser:
 
         docs: list[RawDocument] = []
         for item in data:
-            # Facebook wraps post text in data -> [{ post }]
             text = _extract_post_text(item)
             if not text:
                 continue
             timestamp = _parse_fb_timestamp(item)
-
-            # Extract people from photo tags if present
             people = _extract_photo_tag_names(item)
-            # Collect image URIs from attachments/media
             image_refs = _extract_media_uris(item)
 
             docs.append(
@@ -110,11 +96,16 @@ class FacebookExportParser:
 
     def _parse_comments_file(self, path: Path) -> list[RawDocument]:
         data = _load_json(path)
-        if not isinstance(data, list):
+        # The real Facebook export wraps comments in {"comments_v2": [...]}
+        if isinstance(data, dict):
+            items = data.get("comments_v2", [])
+        elif isinstance(data, list):
+            items = data
+        else:
             return []
 
         docs: list[RawDocument] = []
-        for item in data:
+        for item in items:
             text = _extract_comment_text(item)
             if not text:
                 continue
@@ -138,13 +129,15 @@ class FacebookExportParser:
         if not messages_dir.is_dir():
             return []
         docs: list[RawDocument] = []
-        inbox_dir = messages_dir / "inbox"
-        if not inbox_dir.is_dir():
-            return []
-        for convo_dir in sorted(inbox_dir.iterdir()):
-            if convo_dir.is_dir():
-                for json_file in sorted(convo_dir.glob("*.json")):
-                    docs.extend(self._parse_message_file(json_file))
+        # Scan inbox and message_requests
+        for subfolder in ("inbox", "message_requests"):
+            folder = messages_dir / subfolder
+            if not folder.is_dir():
+                continue
+            for convo_dir in sorted(folder.iterdir()):
+                if convo_dir.is_dir():
+                    for json_file in sorted(convo_dir.glob("message_*.json")):
+                        docs.extend(self._parse_message_file(json_file))
         return docs
 
     def _parse_message_file(self, path: Path) -> list[RawDocument]:
@@ -156,22 +149,35 @@ class FacebookExportParser:
         if not isinstance(messages, list):
             return []
 
+        # Collect conversation partners
+        participants = data.get("participants", [])
+        conversation_partners: list[str] = []
+        if isinstance(participants, list):
+            for p in participants:
+                name = _fix_encoding(str(p.get("name", "") or "")).strip()
+                if name and name != self.user_display_name:
+                    conversation_partners.append(name)
+
         docs: list[RawDocument] = []
         for msg in messages:
-            content = _fix_encoding(msg.get("content", ""))
+            content = _fix_encoding(str(msg.get("content", "") or ""))
             if not content.strip():
                 continue
-            sender = _fix_encoding(msg.get("sender_name", ""))
+            sender = _fix_encoding(str(msg.get("sender_name", "") or ""))
             timestamp = _parse_fb_timestamp(msg)
-            # Messages have a sender; we treat all as received (from others)
-            # since we cannot reliably determine the export owner's name.
+            is_user = sender == self.user_display_name
+
+            source_ref = f"facebook-message-from-{sender}-{hash(content + sender)}"
+            people = [sender] if (sender and not is_user) else []
+
             docs.append(
                 RawDocument(
                     content=content,
                     source="facebook",
-                    source_ref=f"facebook-message-{hash(content + sender)}",
+                    source_ref=source_ref,
                     timestamp=timestamp,
-                    authorship="received",
+                    authorship="user_authored" if is_user else "received",
+                    people=people,
                 )
             )
         return docs
@@ -249,13 +255,7 @@ def _extract_comment_text(item: dict) -> str:
 
 
 def _extract_photo_tag_names(item: dict) -> list[str]:
-    """Extract people names from Facebook photo tags.
-
-    Facebook exports include tagged photos with a structure like:
-    {"tags": [{"name": "John Smith"}, {"name": "Sarah Connor"}]}
-
-    Tags may also appear nested under media or attachments.
-    """
+    """Extract people names from Facebook photo tags."""
     names: list[str] = []
     seen: set[str] = set()
 
@@ -278,7 +278,6 @@ def _extract_photo_tag_names(item: dict) -> list[str]:
             for attachment in attach_list:
                 if isinstance(attachment, dict):
                     _collect_tags(attachment)
-                    # Also check nested data within attachments
                     for nested in attachment.get("data", []):
                         if isinstance(nested, dict):
                             _collect_tags(nested)
@@ -293,12 +292,10 @@ def _extract_media_uris(item: dict) -> list[str]:
     """Extract media file URIs from a Facebook post item."""
     uris: list[str] = []
 
-    # Check direct uri
     uri = item.get("uri")
     if uri:
         uris.append(str(uri))
 
-    # Check attachments and media lists
     for attach_list in (item.get("attachments", []), item.get("media", [])):
         if isinstance(attach_list, list):
             for attachment in attach_list:
@@ -318,12 +315,11 @@ def _extract_media_uris(item: dict) -> list[str]:
 
 
 def _parse_fb_timestamp(item: dict) -> datetime | None:
-    """Parse Facebook's timestamp (unix seconds)."""
+    """Parse Facebook's timestamp (unix seconds or milliseconds)."""
     ts = item.get("timestamp")
     if ts is None:
         ts = item.get("timestamp_ms")
         if ts is not None:
-            # Convert milliseconds to seconds
             try:
                 return datetime.fromtimestamp(int(ts) / 1000, tz=UTC)
             except (ValueError, OSError):
