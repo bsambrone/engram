@@ -196,15 +196,20 @@ class MemoryRepository:
             await self.session.flush()
         return topic
 
-    async def get_or_create_person(self, name: str) -> Person:
+    async def get_or_create_person(
+        self, name: str, relationship_type: str | None = None
+    ) -> Person:
         """Find an existing person by name or create a new one."""
         result = await self.session.execute(
             select(Person).where(Person.name == name)
         )
         person = result.scalar_one_or_none()
         if person is None:
-            person = Person(name=name)
+            person = Person(name=name, relationship_type=relationship_type)
             self.session.add(person)
+            await self.session.flush()
+        elif relationship_type and not person.relationship_type:
+            person.relationship_type = relationship_type
             await self.session.flush()
         return person
 
