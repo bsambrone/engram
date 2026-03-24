@@ -11,13 +11,19 @@ For user-authored content, extract:
 - meaning: What this reveals about their beliefs, values, preferences (string)
 - topics: Key topics mentioned (list of strings)
 - people: People mentioned by name (list of strings)
+- locations: Places mentioned — cities, venues, landmarks, countries \
+(list of strings). Omit if none.
+- life_events: Significant life events — graduations, jobs, moves, \
+weddings, births, etc. (list of {title, event_type} dicts). Omit if none.
 - importance_score: 0.0-1.0 based on identity relevance (float)
 - keep: always true for user content (boolean)
 
 For others' content (authorship is "received" or "other_reply"), extract:
 - intent: What the other person was doing (string)
 - meaning: How this shaped or challenged the user's position (string)
-- topics, people, importance_score as above
+- interaction_context: How this interaction shaped the user's position \
+(string). Omit if not applicable.
+- topics, people, locations, life_events, importance_score as above
 - keep: false if no identity signal (e.g. "lol", "ok", small talk)
 
 People extraction rules:
@@ -39,6 +45,8 @@ class AnalyzedChunk:
     people: list[str]
     importance_score: float
     interaction_context: str | None
+    locations: list[str]
+    life_events: list[dict]
     keep: bool
 
 
@@ -76,5 +84,7 @@ async def analyze_chunk(
         people=data.get("people", []),
         importance_score=data.get("importance_score", 0.5),
         interaction_context=data.get("interaction_context"),
+        locations=data.get("locations", []),
+        life_events=data.get("life_events", []),
         keep=data.get("keep", True),
     )

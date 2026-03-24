@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from engram.ingestion.parsers.base import RawDocument
 from engram.memory.service import MemoryService
 from engram.models.memory import Memory, Person, Topic
+from engram.models.social import LifeEvent, Location, Relationship
 from engram.processing.pipeline import process_documents
 
 EMBEDDING_DIM = 1536
@@ -28,18 +29,28 @@ def _analysis_json(
     meaning: str = "values outdoor activities",
     topics: list[str] | None = None,
     people: list[str] | None = None,
+    locations: list[str] | None = None,
+    life_events: list[dict] | None = None,
+    interaction_context: str | None = None,
     importance_score: float = 0.8,
     keep: bool = True,
 ) -> str:
     """Build a deterministic analysis JSON string."""
-    return json.dumps({
+    data: dict = {
         "intent": intent,
         "meaning": meaning,
         "topics": topics or [],
         "people": people or [],
         "importance_score": importance_score,
         "keep": keep,
-    })
+    }
+    if locations is not None:
+        data["locations"] = locations
+    if life_events is not None:
+        data["life_events"] = life_events
+    if interaction_context is not None:
+        data["interaction_context"] = interaction_context
+    return json.dumps(data)
 
 
 @patch("engram.processing.analyzer.generate", new_callable=AsyncMock)
@@ -261,3 +272,218 @@ async def test_pipeline_multiple_documents(
     ]
     count = await process_documents(docs, db_session)
     assert count == 3
+
+
+@patch("engram.processing.analyzer.generate", new_callable=AsyncMock)
+@patch("engram.processing.embedder.embed_texts", new_callable=AsyncMock)
+async def test_pipeline_stores_interaction_context(
+    mock_embed,
+    mock_generate,
+    db_session: AsyncSession,
+):
+    """Pipeline passes interaction_context through to the memory record."""
+    mock_embed.return_value = [DETERMINISTIC_EMBEDDING]
+    mock_generate.return_value = _analysis_json(
+        intent="debating",
+        meaning="strong opinion",
+        interaction_context="challenged the user's view on climate",
+        importance_score=0.9,
+    )
+
+    doc = RawDocument(
+        content="That's not what the data shows about climate change.",
+        source="reddit",
+        source_ref="ctx-test.txt",
+        authorship="received",
+    )
+    count = await process_documents([doc], db_session)
+    assert count == 1
+
+    result = await db_session.execute(
+        select(Memory).where(Memory.source_ref == "ctx-test.txt")
+    )
+    memory = result.scalar_one()
+    assert memory.interaction_context == "challenged the user's view on climate"
+
+
+@patch("engram.processing.analyzer.generate", new_callable=AsyncMock)
+@patch("engram.processing.embedder.embed_texts", new_callable=AsyncMock)
+async def test_pipeline_stores_locations(
+    mock_embed,
+    mock_generate,
+    db_session: AsyncSession,
+):
+    """Pipeline creates Location records from LLM-extracted locations."""
+    mock_embed.return_value = [DETERMINISTIC_EMBEDDING]
+    mock_generate.return_value = _analysis_json(
+        intent="travel story",
+        meaning="loves travel",
+        topics=["travel"],
+        locations=["Tokyo", "Mount Fuji"],
+        importance_score=0.8,
+    )
+
+    doc = RawDocument(
+        content="Visited Tokyo and climbed Mount Fuji.",
+        source="instagram",
+        source_ref="loc-test.txt",
+        authorship="user_authored",
+    )
+    count = await process_documents([doc], db_session)
+    assert count == 1
+
+    result = await db_session.execute(
+        select(Location).where(Location.name == "Tokyo")
+    )
+    loc = result.scalar_one_or_none()
+    assert loc is not None
+    assert loc.source == "instagram"
+
+    result2 = await db_session.execute(
+        select(Location).where(Location.name == "Mount Fuji")
+    )
+    assert result2.scalar_one_or_none() is not None
+
+
+@patch("engram.processing.analyzer.generate", new_callable=AsyncMock)
+@patch("engram.processing.embedder.embed_texts", new_callable=AsyncMock)
+async def test_pipeline_stores_life_events(
+    mock_embed,
+    mock_generate,
+    db_session: AsyncSession,
+):
+    """Pipeline creates LifeEvent records from LLM-extracted life events."""
+    mock_embed.return_value = [DETERMINISTIC_EMBEDDING]
+    mock_generate.return_value = _analysis_json(
+        intent="announcing milestone",
+        meaning="career growth",
+        topics=["career"],
+        life_events=[{"title": "Started new job at Acme Corp", "event_type": "career"}],
+        importance_score=0.95,
+    )
+
+    doc = RawDocument(
+        content="Excited to announce I started a new job at Acme Corp!",
+        source="facebook",
+        source_ref="event-test.txt",
+        authorship="user_authored",
+    )
+    count = await process_documents([doc], db_session)
+    assert count == 1
+
+    result = await db_session.execute(
+        select(LifeEvent).where(LifeEvent.title == "Started new job at Acme Corp")
+    )
+    event = result.scalar_one_or_none()
+    assert event is not None
+    assert event.event_type == "career"
+    assert event.source == "facebook"
+
+
+@patch("engram.processing.analyzer.generate", new_callable=AsyncMock)
+@patch("engram.processing.embedder.embed_texts", new_callable=AsyncMock)
+async def test_pipeline_updates_relationships_for_received_messages(
+    mock_embed,
+    mock_generate,
+    db_session: AsyncSession,
+):
+    """Received messages create/update Relationship records."""
+    mock_embed.return_value = [DETERMINISTIC_EMBEDDING]
+    mock_generate.return_value = _analysis_json(
+        intent="asking question",
+        meaning="seeking advice",
+        people=["Alice"],
+        importance_score=0.6,
+    )
+
+    doc = RawDocument(
+        content="Hey, what do you think about this?",
+        source="gmail",
+        source_ref="rel-test.txt",
+        authorship="received",
+        people=["Alice"],
+    )
+    count = await process_documents([doc], db_session)
+    assert count == 1
+
+    # Find the person
+    person_result = await db_session.execute(
+        select(Person).where(Person.name == "Alice")
+    )
+    person = person_result.scalar_one()
+
+    # Check relationship was created
+    rel_result = await db_session.execute(
+        select(Relationship).where(
+            Relationship.person_id == person.id,
+            Relationship.platform == "gmail",
+        )
+    )
+    rel = rel_result.scalar_one()
+    assert rel.message_count == 1
+    assert rel.relationship_type == "contact"
+    assert rel.interaction_score == pytest.approx(0.01)
+
+
+@patch("engram.processing.analyzer.generate", new_callable=AsyncMock)
+@patch("engram.processing.embedder.embed_texts", new_callable=AsyncMock)
+async def test_pipeline_facebook_tags_create_relationships(
+    mock_embed,
+    mock_generate,
+    db_session: AsyncSession,
+):
+    """Facebook posts with tagged people create tagged_together relationships."""
+    mock_embed.return_value = [DETERMINISTIC_EMBEDDING]
+    mock_generate.return_value = _analysis_json(
+        intent="sharing moment",
+        meaning="values friendship",
+        topics=["social"],
+        importance_score=0.7,
+    )
+
+    doc = RawDocument(
+        content="Great time at the concert!",
+        source="facebook",
+        source_ref="fb-tag-test.txt",
+        authorship="user_authored",
+        people=["TaggedFriend"],
+    )
+    count = await process_documents([doc], db_session)
+    assert count == 1
+
+    person_result = await db_session.execute(
+        select(Person).where(Person.name == "TaggedFriend")
+    )
+    person = person_result.scalar_one()
+
+    rel_result = await db_session.execute(
+        select(Relationship).where(
+            Relationship.person_id == person.id,
+            Relationship.platform == "facebook",
+        )
+    )
+    rel = rel_result.scalar_one()
+    assert rel.relationship_type == "tagged_together"
+
+
+@patch("engram.processing.analyzer.generate", new_callable=AsyncMock)
+@patch("engram.processing.embedder.embed_texts", new_callable=AsyncMock)
+async def test_pipeline_process_images_flag_off_by_default(
+    mock_embed,
+    mock_generate,
+    db_session: AsyncSession,
+):
+    """By default, image_refs are NOT processed."""
+    mock_embed.return_value = [DETERMINISTIC_EMBEDDING]
+    mock_generate.return_value = _analysis_json(importance_score=0.5)
+
+    doc = RawDocument(
+        content="Check out this photo!",
+        source="facebook",
+        source_ref="img-off-test.txt",
+        authorship="user_authored",
+        image_refs=["nonexistent_photo.jpg"],
+    )
+    # Should not raise even with nonexistent file, because process_images is False
+    count = await process_documents([doc], db_session)
+    assert count == 1

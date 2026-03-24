@@ -56,6 +56,7 @@ class Memory(UUIDMixin, TimestampMixin, Base):
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     reinforcement_count: Mapped[int] = mapped_column(default=0, server_default="0")
     last_reinforced_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    interaction_context: Mapped[str | None] = mapped_column(Text, nullable=True)
     visibility: Mapped[str] = mapped_column(String(20), server_default="active")
     status: Mapped[str] = mapped_column(String(20), server_default="active")
 

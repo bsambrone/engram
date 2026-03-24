@@ -30,6 +30,8 @@ async def test_analyze_user_content(mock_generate, dummy_embedding):
     assert "remote work" in result.topics
     assert "productivity" in result.topics
     assert result.people == []
+    assert result.locations == []
+    assert result.life_events == []
     assert result.importance_score == 0.8
     assert result.keep is True
     assert result.content == "I prefer remote work"
@@ -131,3 +133,53 @@ async def test_analyze_passes_correct_prompt(mock_generate, dummy_embedding):
     call_kwargs = mock_generate.call_args
     assert "Authorship: user_authored" in call_kwargs[1]["user"] or call_kwargs[0][1]
     assert "hello world" in call_kwargs[1]["user"] or call_kwargs[0][1]
+
+
+@patch("engram.processing.analyzer.generate")
+async def test_analyze_extracts_locations(mock_generate, dummy_embedding):
+    mock_generate.return_value = json.dumps(
+        {
+            "intent": "sharing trip",
+            "meaning": "loves travel",
+            "topics": ["travel"],
+            "people": [],
+            "locations": ["Paris", "Eiffel Tower"],
+            "importance_score": 0.7,
+            "keep": True,
+        }
+    )
+    result = await analyze_chunk(
+        "Visited Paris and the Eiffel Tower", "user_authored", dummy_embedding
+    )
+    assert result.locations == ["Paris", "Eiffel Tower"]
+    assert result.life_events == []
+
+
+@patch("engram.processing.analyzer.generate")
+async def test_analyze_extracts_life_events(mock_generate, dummy_embedding):
+    mock_generate.return_value = json.dumps(
+        {
+            "intent": "sharing milestone",
+            "meaning": "career progression",
+            "topics": ["career"],
+            "people": [],
+            "life_events": [{"title": "Got promoted to senior engineer", "event_type": "career"}],
+            "importance_score": 0.9,
+            "keep": True,
+        }
+    )
+    result = await analyze_chunk(
+        "I got promoted to senior engineer!", "user_authored", dummy_embedding
+    )
+    assert len(result.life_events) == 1
+    assert result.life_events[0]["title"] == "Got promoted to senior engineer"
+    assert result.life_events[0]["event_type"] == "career"
+    assert result.locations == []
+
+
+@patch("engram.processing.analyzer.generate")
+async def test_analyze_fallback_has_empty_locations_and_events(mock_generate, dummy_embedding):
+    mock_generate.side_effect = Exception("API error")
+    result = await analyze_chunk("test", "user_authored", dummy_embedding)
+    assert result.locations == []
+    assert result.life_events == []
