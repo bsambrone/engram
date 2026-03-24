@@ -170,6 +170,9 @@ async def run_inference(session: AsyncSession, profile_id: uuid.UUID) -> dict:
             )
             extracted += 1
 
+    # Flush all changes before taking snapshot
+    await session.flush()
+
     # Auto-snapshot after inference
     svc = IdentityService(session)
     await svc.take_snapshot(
