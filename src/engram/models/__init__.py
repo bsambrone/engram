@@ -14,6 +14,7 @@ from engram.models.identity import (
 )
 from engram.models.memory import Memory, MemoryPerson, MemoryTopic, Person, Topic
 from engram.models.photo import Photo, PhotoPerson
+from engram.models.social import LifeEvent, Location, Relationship
 
 __all__ = [
     "Base",
@@ -39,4 +40,8 @@ __all__ = [
     # photo
     "Photo",
     "PhotoPerson",
+    # social
+    "Relationship",
+    "Location",
+    "LifeEvent",
 ]
