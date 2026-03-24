@@ -18,7 +18,14 @@ For others' content (authorship is "received" or "other_reply"), extract:
 - intent: What the other person was doing (string)
 - meaning: How this shaped or challenged the user's position (string)
 - topics, people, importance_score as above
-- keep: false if no identity signal (e.g. "lol", "ok", small talk)"""
+- keep: false if no identity signal (e.g. "lol", "ok", small talk)
+
+People extraction rules:
+- Include @mentions (strip the @ prefix, keep the username): "@johndoe" -> "johndoe"
+- Include names in natural language: "my wife Sarah" -> "Sarah", "Aubrey decorated" -> "Aubrey"
+- Include full names when available: "John Smith tagged you" -> "John Smith"
+- Do NOT include generic references like "my friend" without a name
+- Return each person only once, even if mentioned multiple times"""
 
 
 @dataclass

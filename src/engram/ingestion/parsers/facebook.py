@@ -77,6 +77,12 @@ class FacebookExportParser:
             if not text:
                 continue
             timestamp = _parse_fb_timestamp(item)
+
+            # Extract people from photo tags if present
+            people = _extract_photo_tag_names(item)
+            # Collect image URIs from attachments/media
+            image_refs = _extract_media_uris(item)
+
             docs.append(
                 RawDocument(
                     content=text,
@@ -84,6 +90,8 @@ class FacebookExportParser:
                     source_ref=f"facebook-post-{hash(text)}",
                     timestamp=timestamp,
                     authorship="user_authored",
+                    people=people,
+                    image_refs=image_refs,
                 )
             )
         return docs
@@ -238,6 +246,75 @@ def _extract_comment_text(item: dict) -> str:
         return _fix_encoding(comment).strip()
 
     return ""
+
+
+def _extract_photo_tag_names(item: dict) -> list[str]:
+    """Extract people names from Facebook photo tags.
+
+    Facebook exports include tagged photos with a structure like:
+    {"tags": [{"name": "John Smith"}, {"name": "Sarah Connor"}]}
+
+    Tags may also appear nested under media or attachments.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def _collect_tags(obj: dict) -> None:
+        tags = obj.get("tags", [])
+        if isinstance(tags, list):
+            for tag in tags:
+                if isinstance(tag, dict):
+                    name = _fix_encoding(str(tag.get("name", "") or "")).strip()
+                    if name and name not in seen:
+                        seen.add(name)
+                        names.append(name)
+
+    # Check top-level tags
+    _collect_tags(item)
+
+    # Check tags within media_metadata or attachments
+    for attach_list in (item.get("attachments", []), item.get("media", [])):
+        if isinstance(attach_list, list):
+            for attachment in attach_list:
+                if isinstance(attachment, dict):
+                    _collect_tags(attachment)
+                    # Also check nested data within attachments
+                    for nested in attachment.get("data", []):
+                        if isinstance(nested, dict):
+                            _collect_tags(nested)
+                            media = nested.get("media", {})
+                            if isinstance(media, dict):
+                                _collect_tags(media)
+
+    return names
+
+
+def _extract_media_uris(item: dict) -> list[str]:
+    """Extract media file URIs from a Facebook post item."""
+    uris: list[str] = []
+
+    # Check direct uri
+    uri = item.get("uri")
+    if uri:
+        uris.append(str(uri))
+
+    # Check attachments and media lists
+    for attach_list in (item.get("attachments", []), item.get("media", [])):
+        if isinstance(attach_list, list):
+            for attachment in attach_list:
+                if isinstance(attachment, dict):
+                    uri = attachment.get("uri")
+                    if uri:
+                        uris.append(str(uri))
+                    for nested in attachment.get("data", []):
+                        if isinstance(nested, dict):
+                            media = nested.get("media", {})
+                            if isinstance(media, dict):
+                                uri = media.get("uri")
+                                if uri:
+                                    uris.append(str(uri))
+
+    return uris
 
 
 def _parse_fb_timestamp(item: dict) -> datetime | None:

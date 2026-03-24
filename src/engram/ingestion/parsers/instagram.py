@@ -74,6 +74,12 @@ class InstagramExportParser:
             if not title:
                 continue
             timestamp = _parse_creation_timestamp(first_media)
+            # Collect URIs for all media items associated with this post
+            image_refs = [
+                m.get("uri", "")
+                for m in (media_list if isinstance(media_list, list) else [])
+                if m.get("uri")
+            ]
             docs.append(
                 RawDocument(
                     content=title,
@@ -81,6 +87,7 @@ class InstagramExportParser:
                     source_ref=first_media.get("uri", f"instagram-post-{hash(title)}"),
                     timestamp=timestamp,
                     authorship="user_authored",
+                    image_refs=image_refs,
                 )
             )
         return docs
@@ -150,6 +157,15 @@ class InstagramExportParser:
         if not isinstance(messages, list):
             return []
 
+        # Collect unique conversation partners (non-user participants)
+        participants = data.get("participants", [])
+        conversation_partners: list[str] = []
+        if isinstance(participants, list):
+            for p in participants:
+                name = _fix_encoding(str(p.get("name", "") or "")).strip()
+                if name and name != self.user_display_name:
+                    conversation_partners.append(name)
+
         docs: list[RawDocument] = []
         for msg in messages:
             content = _fix_encoding(str(msg.get("content", "") or ""))
@@ -159,13 +175,18 @@ class InstagramExportParser:
             ts_ms = msg.get("timestamp_ms")
             timestamp = _parse_ms_timestamp(ts_ms)
             is_user = sender == self.user_display_name
+            # Include sender name in source_ref for context
+            source_ref = f"instagram-message-from-{sender}-{hash(content + sender)}"
+            # Attach the sender as a person (for received messages)
+            people = [sender] if (sender and not is_user) else []
             docs.append(
                 RawDocument(
                     content=content,
                     source="instagram",
-                    source_ref=f"instagram-message-{hash(content + sender)}",
+                    source_ref=source_ref,
                     timestamp=timestamp,
                     authorship="user_authored" if is_user else "received",
+                    people=people,
                 )
             )
         return docs

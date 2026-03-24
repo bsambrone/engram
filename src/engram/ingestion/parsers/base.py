@@ -16,6 +16,8 @@ class RawDocument:
     timestamp: datetime | None = None
     authorship: str = "user_authored"
     images: list[bytes] = field(default_factory=list)
+    image_refs: list[str] = field(default_factory=list)  # paths to associated images
+    people: list[str] = field(default_factory=list)  # people extracted at parse time
 
 
 @runtime_checkable

@@ -37,6 +37,9 @@ async def process_documents(documents: list[RawDocument], session: AsyncSession)
             if not analyzed.keep:
                 continue
 
+            # Merge parser-extracted people with LLM-extracted people
+            all_people = list(dict.fromkeys(doc.people + analyzed.people))
+
             await memory_service.store_analyzed_chunk(
                 content=analyzed.content,
                 embedding=analyzed.embedding,
@@ -46,7 +49,7 @@ async def process_documents(documents: list[RawDocument], session: AsyncSession)
                 intent=analyzed.intent,
                 meaning=analyzed.meaning,
                 topics=analyzed.topics,
-                people=analyzed.people,
+                people=all_people,
                 importance_score=analyzed.importance_score,
                 timestamp=doc.timestamp,
             )
