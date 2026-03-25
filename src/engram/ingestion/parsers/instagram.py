@@ -225,16 +225,16 @@ def _parse_unix_timestamp(val: int | float | str | None) -> datetime | None:
     if val is None:
         return None
     try:
-        return datetime.fromtimestamp(int(val), tz=UTC)
+        return datetime.utcfromtimestamp(int(val))
     except (ValueError, OSError, TypeError):
         return None
 
 
 def _parse_ms_timestamp(val: int | float | str | None) -> datetime | None:
-    """Convert a unix-milliseconds value to a datetime."""
+    """Convert a unix-milliseconds value to a naive UTC datetime."""
     if val is None:
         return None
     try:
-        return datetime.fromtimestamp(int(val) / 1000, tz=UTC)
+        return datetime.utcfromtimestamp(int(val) / 1000)
     except (ValueError, OSError, TypeError):
         return None

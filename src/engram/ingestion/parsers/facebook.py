@@ -315,18 +315,18 @@ def _extract_media_uris(item: dict) -> list[str]:
 
 
 def _parse_fb_timestamp(item: dict) -> datetime | None:
-    """Parse Facebook's timestamp (unix seconds or milliseconds)."""
+    """Parse Facebook's timestamp (unix seconds or milliseconds). Returns naive UTC."""
     ts = item.get("timestamp")
     if ts is None:
         ts = item.get("timestamp_ms")
         if ts is not None:
             try:
-                return datetime.fromtimestamp(int(ts) / 1000, tz=UTC)
+                return datetime.utcfromtimestamp(int(ts) / 1000)
             except (ValueError, OSError):
                 return None
     if ts is not None:
         try:
-            return datetime.fromtimestamp(int(ts), tz=UTC)
+            return datetime.utcfromtimestamp(int(ts))
         except (ValueError, OSError):
             return None
     return None

@@ -28,29 +28,30 @@ async def _update_relationships(
     relationship_type: str = "contact",
 ) -> None:
     """Find or create Relationship records for each person on the given platform."""
-    for person_name in people:
-        person = await repo.get_or_create_person(person_name)
-        result = await session.execute(
-            select(Relationship).where(
-                Relationship.person_id == person.id,
-                Relationship.platform == source,
-            )
-        )
-        rel = result.scalar_one_or_none()
-        if rel:
-            rel.message_count += 1
-            rel.interaction_score = min(rel.message_count / 100, 1.0)
-        else:
-            session.add(
-                Relationship(
-                    person_id=person.id,
-                    platform=source,
-                    relationship_type=relationship_type,
-                    message_count=1,
-                    interaction_score=0.01,
+    with session.no_autoflush:
+        for person_name in people:
+            person = await repo.get_or_create_person(person_name)
+            result = await session.execute(
+                select(Relationship).where(
+                    Relationship.person_id == person.id,
+                    Relationship.platform == source,
                 )
             )
-    await session.flush()
+            rel = result.scalar_one_or_none()
+            if rel:
+                rel.message_count += 1
+                rel.interaction_score = min(rel.message_count / 100, 1.0)
+            else:
+                session.add(
+                    Relationship(
+                        person_id=person.id,
+                        platform=source,
+                        relationship_type=relationship_type,
+                        message_count=1,
+                        interaction_score=0.01,
+                    )
+                )
+        await session.flush()
 
 
 async def _store_locations(
@@ -60,25 +61,29 @@ async def _store_locations(
     timestamp=None,
 ) -> None:
     """Get-or-create Location records for each location name."""
-    for loc_name in location_names:
-        result = await session.execute(
-            select(Location).where(Location.name == loc_name)
-        )
-        loc = result.scalar_one_or_none()
-        if loc:
-            loc.visit_count += 1
-            if timestamp and (loc.last_visited is None or timestamp > loc.last_visited):
-                loc.last_visited = timestamp
-        else:
-            session.add(
-                Location(
-                    name=loc_name,
-                    source=source,
-                    first_visited=timestamp,
-                    last_visited=timestamp,
-                )
+    # Strip timezone if present
+    if timestamp and hasattr(timestamp, "tzinfo") and timestamp.tzinfo is not None:
+        timestamp = timestamp.replace(tzinfo=None)
+    with session.no_autoflush:
+        for loc_name in location_names:
+            result = await session.execute(
+                select(Location).where(Location.name == loc_name)
             )
-    await session.flush()
+            loc = result.scalar_one_or_none()
+            if loc:
+                loc.visit_count += 1
+                if timestamp and (loc.last_visited is None or timestamp > loc.last_visited):
+                    loc.last_visited = timestamp
+            else:
+                session.add(
+                    Location(
+                        name=loc_name,
+                        source=source,
+                        first_visited=timestamp,
+                        last_visited=timestamp,
+                    )
+                )
+        await session.flush()
 
 
 async def _store_life_events(
