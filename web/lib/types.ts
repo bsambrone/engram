@@ -36,6 +36,19 @@ export interface Belief {
   nuance: string | null;
   confidence: number | null;
   source: string | null;
+  valid_from: string | null;
+  valid_until: string | null;
+}
+
+export interface BeliefVersion {
+  id: string;
+  topic: string;
+  stance: string | null;
+  nuance: string | null;
+  confidence: number | null;
+  source: string | null;
+  valid_from: string | null;
+  valid_until: string | null;
 }
 
 export interface Preference {
