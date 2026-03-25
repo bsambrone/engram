@@ -6,7 +6,7 @@ import math
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -156,6 +156,79 @@ class MemoryRepository:
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return [m for m, _ in scored[:limit]]
+
+    # ---- Filtered search (non-vector) ----------------------------------------
+
+    _SORT_MAP = {
+        "date": lambda: Memory.timestamp.desc().nulls_last(),
+        "importance": lambda: Memory.importance_score.desc().nulls_last(),
+        "reinforcement": lambda: Memory.reinforcement_count.desc(),
+    }
+
+    async def filtered_search(
+        self,
+        *,
+        q: str | None = None,
+        topic: str | None = None,
+        person: str | None = None,
+        sources: list[str] | None = None,
+        visibility: str | None = None,
+        sort: str = "date",
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[Memory]:
+        """SQL-based search with filters, sorting, and pagination.
+
+        Used by the web UI when no vector embedding is needed.
+        """
+        stmt = (
+            select(Memory)
+            .where(Memory.status == "active")
+            .options(selectinload(Memory.topics), selectinload(Memory.people))
+        )
+
+        # Text search (case-insensitive substring match on content)
+        if q:
+            stmt = stmt.where(
+                or_(
+                    Memory.content.ilike(f"%{q}%"),
+                    Memory.meaning.ilike(f"%{q}%"),
+                )
+            )
+
+        # Topic / person filters
+        if topic:
+            stmt = stmt.join(Memory.topics).where(Topic.name == topic)
+        if person:
+            stmt = stmt.join(Memory.people).where(Person.name == person)
+
+        # Multi-source filter
+        if sources:
+            stmt = stmt.where(Memory.source.in_(sources))
+
+        # Visibility filter — default to "active" if not specified
+        if visibility:
+            stmt = stmt.where(Memory.visibility == visibility)
+        else:
+            stmt = stmt.where(Memory.visibility == "active")
+
+        # Date range filters
+        if date_from:
+            stmt = stmt.where(Memory.timestamp >= date_from)
+        if date_to:
+            stmt = stmt.where(Memory.timestamp <= date_to)
+
+        # Sorting
+        order_fn = self._SORT_MAP.get(sort, self._SORT_MAP["date"])
+        stmt = stmt.order_by(order_fn())
+
+        # Pagination
+        stmt = stmt.offset(offset).limit(limit)
+
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
     # ---- Timeline ------------------------------------------------------------
 
