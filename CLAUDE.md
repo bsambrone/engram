@@ -1,78 +1,55 @@
-# Engram — Project Guide
+# Engram
 
-## What This Is
+A self-hosted digital engram platform — a realistic digital representation of a person built from their real data. See **[ENGRAMDESIGN.md](ENGRAMDESIGN.md)** for full architecture, design decisions, database schema, and roadmap.
 
-A self-hosted digital engram platform. Ingests personal data (emails, social media posts, messages, photos), builds structured living memories with LLM-extracted meaning, infers identity traits, and exposes the engram via REST API and MCP server.
+## Quick Reference
 
-Inspired by the engram concept from Cyberpunk 2077 — a realistic digital representation of a person built from their real data.
-
-## Tech Stack
-
-- **Python 3.12+** with **FastAPI** (async)
-- **PostgreSQL 16 + pgvector** (Docker, port 5433) for storage + vector search
-- **Redis** (Docker, port 6379) for embedding cache + job queue
-- **OpenAI API** for embeddings (text-embedding-3-small) and generation (gpt-5.2)
-- **SQLAlchemy** (async/asyncpg) + **Alembic** for ORM and migrations
-- **MCP Python SDK** for Model Context Protocol server
-- **uv** for package management, **pytest** for testing, **ruff** for linting
-
-## Architecture
-
-Monolith FastAPI app with modular packages:
-```
-Data Exports → Parsers → Processing Pipeline → Memory Store → Identity Layer → RAG Engine → MCP/REST API
+```bash
+docker compose up -d          # Start pgvector (5433) + Redis (6379)
+uv sync --all-extras          # Install dependencies
+uv run engram init            # Setup wizard
+uv run engram server          # Start REST API (port 8000)
+uv run engram mcp             # Start MCP server (stdio)
+uv run pytest tests/ -v       # Run tests (310+)
+uv run ruff check src/ tests/ # Lint
 ```
 
-### Key modules:
-- `src/engram/ingestion/parsers/` — Export parsers for Gmail (MBOX), Reddit (CSV), Facebook (JSON), Instagram (JSON)
-- `src/engram/processing/` — Pipeline: normalize → chunk → embed → LLM analyze → store
-- `src/engram/memory/` — Living memory system with reinforcement, degradation, evolution
-- `src/engram/identity/` — Beliefs, preferences, style inference with temporal tracking
-- `src/engram/llm/` — LLM providers + RAG pipeline
-- `src/engram/mcp/` — MCP server exposing engram as tools
-- `src/engram/api/` — REST API with owner/shared access control
-- `src/engram/photos/` — Photo storage, vision analysis, image generation
+## Critical Rules
+
+- **NEVER drop or recreate database tables** — the database has real user data (10,000+ memories). Always use additive Alembic migrations.
+- **NEVER commit API keys or .env files** — they are gitignored.
+- **OpenAI API is used for both generation and embeddings** — Anthropic support is deferred.
+- **All timestamps must be timezone-naive** — asyncpg requires naive datetimes for TIMESTAMP columns.
+- **User-set identity traits (source="user") are never overwritten by inference.**
+
+## Key Entry Points
+
+| What | Where |
+|------|-------|
+| FastAPI app | `src/engram/main.py` |
+| CLI commands | `src/engram/cli.py` |
+| Config (env vars) | `src/engram/config.py` |
+| Processing pipeline | `src/engram/processing/pipeline.py` |
+| Memory search (composite ranking) | `src/engram/memory/repository.py` |
+| Identity inference (temporal evolve) | `src/engram/identity/inference.py` |
+| RAG pipeline (ask the engram) | `src/engram/llm/rag.py` |
+| MCP server (9 tools) | `src/engram/mcp/server.py` |
+| Export parsers | `src/engram/ingestion/parsers/` |
+| Database models | `src/engram/models/` |
+| Ingestion scripts | `scripts/` |
 
 ## Database
 
-Docker Compose runs pgvector on port 5433 and Redis on port 6379.
+Docker Compose: pgvector on port **5433**, Redis on port **6379**. Connection: `postgresql+asyncpg://postgres:postgres@localhost:5433/engram`
 
-Key tables: memories (with pgvector embeddings), topics, people, beliefs (with temporal valid_from/valid_until), preferences, style_profiles, identity_snapshots, relationships, locations, life_events, photos, data_exports, ingestion_jobs, access_tokens.
+21 tables — see ENGRAMDESIGN.md for full schema. Key tables: `memories` (pgvector embeddings), `beliefs` (temporal valid_from/valid_until), `relationships`, `locations`, `life_events`, `photos`.
 
-Migrations are managed with Alembic. **NEVER drop/recreate tables** — the database has real user data. Always use additive migrations.
-
-## Running
+## Testing
 
 ```bash
-docker compose up -d          # Start pgvector + Redis
-uv sync --all-extras          # Install dependencies
-uv run engram init            # Setup wizard
-uv run engram server          # Start REST API
-uv run engram mcp             # Start MCP server
-uv run pytest tests/ -v       # Run tests
+uv run pytest tests/ -v                    # Full suite
+uv run pytest tests/test_memory/ -v        # Memory module only
+uv run pytest tests/test_integration/ -v   # Integration tests
 ```
 
-## Key Design Decisions
-
-- **Data exports, not live APIs** — Users download their data from each platform (Google Takeout, Reddit data request, Facebook/Instagram download). Engram processes the files offline.
-- **OpenAI for everything** — Embeddings (text-embedding-3-small) and generation (configurable model). Anthropic support deferred.
-- **Temporal identity** — Beliefs and preferences have valid_from/valid_until. The engram can "respond as of" a specific date.
-- **Living memories** — Memories can be reinforced (new data supports them), degraded (contradicted), or evolved (nuanced over time).
-- **Owner vs shared access** — Owner sees full citations and sources. Shared access sees only the engram's responses.
-
-## Current State
-
-- Full processing pipeline working with real data
-- ~7,000 memories from Gmail, Reddit, Instagram
-- Identity inference with 21+ beliefs, 40+ preferences, style profile
-- MCP server with 9 tools
-- 300+ tests passing
-- Facebook data imported (free signals), LLM processing pending
-
-## What's Next
-
-- Process Facebook posts/comments/messages through LLM pipeline
-- Web UI for memory/identity management and visualization
-- Timeline visualization of belief evolution
-- Voice synthesis
-- Continuous learning (real-time ingestion)
+Tests use a separate `engram_test` database on the same Docker Postgres. Session-scoped async fixtures with `asyncio_default_test_loop_scope = "session"`.
