@@ -72,12 +72,13 @@ async def upload_photo(
 @router.get("", response_model=list[PhotoOut])
 async def list_photos(
     is_reference: bool | None = Query(None),
+    person_id: uuid.UUID | None = Query(None, description="Filter photos by person"),
     session: AsyncSession = Depends(get_session),
     _owner: AccessToken = Depends(require_owner),
 ):
     """List photos with optional filtering."""
     repo = PhotoRepository(session)
-    photos = await repo.list_photos(is_reference=is_reference)
+    photos = await repo.list_photos(is_reference=is_reference, person_id=person_id)
     return [PhotoOut.model_validate(p) for p in photos]
 
 

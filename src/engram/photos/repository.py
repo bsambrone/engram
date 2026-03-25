@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from engram.models.photo import Photo
+from engram.models.photo import Photo, PhotoPerson
 
 
 class PhotoRepository:
@@ -53,6 +53,7 @@ class PhotoRepository:
         self,
         profile_id: uuid.UUID | None = None,
         is_reference: bool | None = None,
+        person_id: uuid.UUID | None = None,
     ) -> list[Photo]:
         """List photos with optional filters."""
         stmt = select(Photo).order_by(Photo.created_at.desc())
@@ -60,6 +61,10 @@ class PhotoRepository:
             stmt = stmt.where(Photo.profile_id == profile_id)
         if is_reference is not None:
             stmt = stmt.where(Photo.is_reference == is_reference)
+        if person_id is not None:
+            stmt = stmt.join(PhotoPerson, PhotoPerson.photo_id == Photo.id).where(
+                PhotoPerson.person_id == person_id
+            )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
