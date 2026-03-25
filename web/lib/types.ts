@@ -102,3 +102,38 @@ export interface Snapshot {
   label: string | null;
   created_at: string | null;
 }
+
+/* ── Ingestion & Source Management ────────────────────────────────── */
+
+export interface IngestJob {
+  job_id: string;
+  source: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  items_processed: number;
+  errors: number;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface RegisteredExport {
+  id: string;
+  platform: string;
+  export_path: string;
+  status: string;
+  created_at: string | null;
+}
+
+export interface ExportValidation {
+  valid: boolean;
+  platform: string;
+  export_path: string;
+  message: string;
+  file_count?: number;
+}
+
+export interface SourceInfo {
+  source: string;
+  memory_count: number;
+  visibility_breakdown: Record<string, number>;
+}

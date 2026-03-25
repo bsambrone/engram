@@ -54,7 +54,40 @@ export const api = {
   put<T>(path: string, body?: unknown): Promise<T> {
     return request<T>('PUT', path, body);
   },
-  delete<T>(path: string): Promise<T> {
-    return request<T>('DELETE', path);
+  delete<T>(path: string, body?: unknown): Promise<T> {
+    return request<T>('DELETE', path, body);
+  },
+
+  /** Upload a file via multipart/form-data. */
+  async upload<T>(path: string, file: File): Promise<T> {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch(`${BASE_URL}${path}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (res.status === 401) {
+      clearToken();
+      if (typeof window !== 'undefined') {
+        window.location.href = '/auth';
+      }
+      throw new ApiError('Unauthorized', 401);
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => 'Unknown error');
+      throw new ApiError(text, res.status);
+    }
+
+    return res.json() as Promise<T>;
   },
 };
