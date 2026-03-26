@@ -140,11 +140,11 @@ export function SourceManager() {
                 </Text>
               </Table.Td>
               <Table.Td>
-                <Text size="sm">{src.memory_count}</Text>
+                <Text size="sm">{src.total ?? src.memory_count}</Text>
               </Table.Td>
               <Table.Td>
                 <Group gap={4}>
-                  {Object.entries(src.visibility_breakdown).map(([vis, count]) => (
+                  {Object.entries(src.visibility_breakdown || src.visibility || src.by_visibility || {}).map(([vis, count]) => (
                     <Badge
                       key={vis}
                       variant="light"
