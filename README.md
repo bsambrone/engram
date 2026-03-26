@@ -38,10 +38,24 @@ A self-hosted digital engram platform. Ingest your personal data, build structur
    uv run alembic upgrade head
    ```
 
-5. Start the server:
+5. Install the web frontend:
 
    ```bash
-   uv run engram server
+   cd web && npm install && cd ..
+   ```
+
+6. Start everything:
+
+   ```bash
+   ./start.sh
+   ```
+
+   This starts Docker, the backend (port 8000), and the frontend (port 3001). Open **http://localhost:3001** and enter your engram token.
+
+   Or start services individually:
+   ```bash
+   uv run engram server          # Backend only
+   cd web && npm run dev -- -p 3001  # Frontend only
    ```
 
 ## CLI Commands
