@@ -94,7 +94,7 @@ class StyleProfile(UUIDMixin, TimestampMixin, Base):
     profile_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("identity_profiles.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    tone: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    tone: Mapped[str | None] = mapped_column(Text, nullable=True)
     humor_level: Mapped[float | None] = mapped_column(nullable=True)
     verbosity: Mapped[float | None] = mapped_column(nullable=True)
     formality: Mapped[float | None] = mapped_column(nullable=True)
