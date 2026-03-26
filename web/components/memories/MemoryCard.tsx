@@ -60,10 +60,10 @@ export function MemoryCard({ memory, onUpdate }: MemoryCardProps) {
           )}
 
           <Group gap={4} wrap="wrap">
-            {(expanded ? memory.topics : memory.topics.slice(0, 3)).map((t) => (
-              <TopicTag key={t.id} name={t.name} />
+            {(expanded ? (memory.topics || []) : (memory.topics || []).slice(0, 3)).map((t) => (
+              <TopicTag key={typeof t === 'string' ? t : t.id} name={typeof t === 'string' ? t : t.name} />
             ))}
-            {!expanded && memory.topics.length > 3 && (
+            {!expanded && (memory.topics || []).length > 3 && (
               <Badge variant="light" color="gray" size="sm">
                 +{memory.topics.length - 3}
               </Badge>
@@ -71,10 +71,10 @@ export function MemoryCard({ memory, onUpdate }: MemoryCardProps) {
           </Group>
 
           <Group gap={4} wrap="wrap">
-            {(expanded ? memory.people : memory.people.slice(0, 2)).map((p) => (
-              <PersonChip key={p.id} name={p.name} id={p.id} />
+            {(expanded ? (memory.people || []) : (memory.people || []).slice(0, 2)).map((p) => (
+              <PersonChip key={typeof p === 'string' ? p : p.id} name={typeof p === 'string' ? p : p.name} id={typeof p === 'string' ? undefined : p.id} />
             ))}
-            {!expanded && memory.people.length > 2 && (
+            {!expanded && (memory.people || []).length > 2 && (
               <Badge variant="light" color="gray" size="sm">
                 +{memory.people.length - 2}
               </Badge>
