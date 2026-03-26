@@ -63,9 +63,21 @@ class RedditExportParser:
                 body = row.get("body", "").strip()
                 if not body:
                     continue
+                # Extract thread context from the link URL slug
+                # e.g. /r/AskReddit/comments/s11k3/what_stupid_obviously_untrue_fact_do_you_keep/
+                subreddit = row.get("subreddit", "").strip()
+                link = row.get("link", "")
+                thread_title = self._extract_thread_title(link)
+                # Prepend thread context so the LLM can judge sarcasm/irony
+                if thread_title:
+                    content = f"[r/{subreddit} thread: \"{thread_title}\"]\n\n{body}"
+                elif subreddit:
+                    content = f"[r/{subreddit}]\n\n{body}"
+                else:
+                    content = body
                 docs.append(
                     RawDocument(
-                        content=body,
+                        content=content,
                         source="reddit",
                         source_ref=row.get("permalink", ""),
                         timestamp=self._parse_date(row.get("date", "")),
@@ -73,6 +85,27 @@ class RedditExportParser:
                     )
                 )
         return docs
+
+    @staticmethod
+    def _extract_thread_title(link_url: str) -> str:
+        """Extract a human-readable thread title from a Reddit URL slug.
+
+        '/r/AskReddit/comments/s11k3/what_stupid_obviously_untrue_fact_do_you_keep/'
+        → 'what stupid obviously untrue fact do you keep'
+        """
+        if not link_url:
+            return ""
+        parts = link_url.rstrip("/").split("/")
+        # URL format: /r/{sub}/comments/{id}/{slug}/
+        if len(parts) >= 6 and parts[-3] == "comments":
+            slug = parts[-1]
+            return slug.replace("_", " ")
+        if len(parts) >= 5:
+            # Try last segment as slug
+            slug = parts[-1]
+            if slug and not slug.isalnum():
+                return slug.replace("_", " ")
+        return ""
 
     def _parse_chat(self, path: Path) -> list[RawDocument]:
         if not path.exists():

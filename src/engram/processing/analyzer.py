@@ -6,16 +6,30 @@ from engram.llm.providers import generate
 ANALYSIS_SYSTEM_PROMPT = """\
 You analyze text to extract identity signals. Return valid JSON only, no markdown fences.
 
+CRITICAL — Context awareness:
+- Content may include thread/post context in brackets like [r/AskReddit thread: "what stupid fact..."]
+- Always consider the CONTEXT when interpreting meaning. A response to a sarcastic \
+prompt, joke thread, or hypothetical question is NOT a sincere belief.
+- Look for signals of sarcasm, irony, humor, devil's advocate, or playing along with a prompt.
+- If the content appears to be sarcastic or ironic, set meaning to reflect the ACTUAL \
+intent (e.g. "sarcastic response mocking this belief" not "sincerely holds this belief").
+- Short one-liners in humor/askreddit-style threads are almost always jokes or sarcasm.
+- Lower importance_score significantly (0.1-0.3) for content that is clearly sarcastic, \
+joking, or responding to a hypothetical prompt.
+
 For user-authored content, extract:
-- intent: What the user was trying to say or do (string)
-- meaning: What this reveals about their beliefs, values, preferences (string)
+- intent: What the user was ACTUALLY trying to say or do — account for sarcasm, \
+humor, and context (string)
+- meaning: What this GENUINELY reveals about their beliefs, values, preferences. \
+If sarcastic, the meaning may be the opposite of the literal text. (string)
 - topics: Key topics mentioned (list of strings)
 - people: People mentioned by name (list of strings)
 - locations: Places mentioned — cities, venues, landmarks, countries \
 (list of strings). Omit if none.
 - life_events: Significant life events — graduations, jobs, moves, \
 weddings, births, etc. (list of {title, event_type} dicts). Omit if none.
-- importance_score: 0.0-1.0 based on identity relevance (float)
+- importance_score: 0.0-1.0 based on identity relevance (float). \
+Jokes/sarcasm/hypotheticals should be 0.1-0.3.
 - keep: always true for user content (boolean)
 
 For others' content (authorship is "received" or "other_reply"), extract:

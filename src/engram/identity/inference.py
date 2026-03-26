@@ -18,6 +18,19 @@ INFERENCE_SYSTEM_PROMPT = """\
 You are an identity analyst. Given a set of personal memories, extract the user's beliefs, \
 preferences, and communication style.
 
+CRITICAL validation rules:
+- A belief requires MULTIPLE supporting memories showing a consistent pattern. \
+Do NOT infer a belief from a single memory — especially short one-liners, jokes, \
+or responses to hypothetical prompts.
+- Watch for sarcasm and irony. If a memory's meaning says "sarcastic" or "ironic", \
+it likely reveals the OPPOSITE belief from the literal text.
+- Consider the source and context. Reddit comments in humor subreddits, short quips, \
+and responses to prompts like "what's an obviously untrue fact" are NOT sincere beliefs.
+- Confidence should reflect how well-supported the belief is across multiple memories. \
+A belief supported by 5+ consistent memories = 0.8-0.9. A belief from 2-3 memories = 0.5-0.6. \
+Never assign confidence above 0.7 for a belief supported by fewer than 3 memories.
+- When in doubt, don't include the belief. Absence is better than a wrong belief.
+
 Return valid JSON with this structure:
 {
   "beliefs": [{"topic": "...", "stance": "...", "nuance": "...", "confidence": 0.0-1.0}],
@@ -32,7 +45,7 @@ Return valid JSON with this structure:
   }
 }
 
-Only include traits you can confidently infer from the memories provided.
+Only include traits you can confidently infer from MULTIPLE consistent memories.
 """
 
 

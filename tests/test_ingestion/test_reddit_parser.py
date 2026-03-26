@@ -150,7 +150,8 @@ async def test_parse_comments(parser: RedditExportParser, tmp_dir: Path):
     doc = docs[0]
     assert doc.source == "reddit"
     assert doc.authorship == "user_authored"
-    assert doc.content == "Great post, thanks for sharing!"
+    assert "Great post, thanks for sharing!" in doc.content
+    assert '[r/test thread: "my post"]' in doc.content
     assert doc.source_ref == "https://reddit.com/r/test/comments/abc123/my_post/def456/"
 
 
