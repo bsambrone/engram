@@ -9,10 +9,15 @@ cd "$SCRIPT_DIR"
 
 echo "🧠 Starting Engram..."
 
-# Check Docker
-if ! docker compose ps --quiet 2>/dev/null | grep -q .; then
+# Check Docker — use sudo if regular docker fails (common on fresh WSL installs)
+DOCKER_CMD="docker"
+if ! $DOCKER_CMD compose ps --quiet 2>/dev/null; then
+    DOCKER_CMD="sudo docker"
+fi
+
+if ! $DOCKER_CMD compose ps --quiet 2>/dev/null | grep -q .; then
     echo "📦 Starting Docker containers (pgvector + Redis)..."
-    docker compose up -d
+    $DOCKER_CMD compose up -d
     sleep 2
 fi
 
