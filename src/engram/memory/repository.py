@@ -29,18 +29,30 @@ def _reinforcement_score(count: int) -> float:
     return min(count / 10, 1.0)
 
 
+def _authorship_weight(authorship: str | None) -> float:
+    """Weight memories by authorship. User's own words matter most."""
+    if authorship == "user_authored":
+        return 1.0
+    if authorship == "received":
+        return 0.4  # Weak signal — something the user saw, not said
+    return 0.7  # Other/unknown
+
+
 def _composite_score(
     cosine_similarity: float,
     importance: float | None,
     timestamp: datetime | None,
     reinforcement_count: int,
     halflife_days: int,
+    authorship: str | None = None,
 ) -> float:
-    """Weighted composite ranking score."""
+    """Weighted composite ranking score with authorship weighting."""
     imp = importance if importance is not None else 0.5
     rec = _recency_score(timestamp, halflife_days)
     rein = _reinforcement_score(reinforcement_count)
-    return cosine_similarity * 0.5 + imp * 0.2 + rec * 0.2 + rein * 0.1
+    auth = _authorship_weight(authorship)
+    base = cosine_similarity * 0.45 + imp * 0.2 + rec * 0.15 + rein * 0.05
+    return base * auth + (1 - auth) * base * 0.5  # Received memories get dampened
 
 
 class MemoryRepository:
@@ -151,6 +163,7 @@ class MemoryRepository:
                 memory.timestamp,
                 memory.reinforcement_count,
                 halflife,
+                memory.authorship,
             )
             scored.append((memory, score))
 

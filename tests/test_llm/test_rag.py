@@ -95,7 +95,9 @@ def _make_fake_memory(**overrides):
         "id": uuid.uuid4(),
         "content": "Test memory content",
         "intent": "personal",
+        "meaning": "test meaning",
         "confidence": 0.8,
+        "authorship": "user_authored",
         "timestamp": datetime(2025, 1, 1, tzinfo=timezone.utc),
     }
     defaults.update(overrides)

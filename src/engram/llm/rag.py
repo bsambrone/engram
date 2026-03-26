@@ -91,15 +91,33 @@ def build_prompt(
             lines.append(f"- Patterns: {style['communication_patterns']}")
         sections.append("\n".join(lines))
 
-    # Memories
-    if memories:
-        lines = ["## Relevant Memories"]
-        for m in memories:
+    # Memories — separated by authorship so the LLM knows what YOU said vs what others said
+    user_memories = [m for m in memories if m.get("authorship") == "user_authored"]
+    received_memories = [m for m in memories if m.get("authorship") != "user_authored"]
+
+    if user_memories:
+        lines = ["## Your Memories (things you said/wrote — primary identity signal)"]
+        for m in user_memories:
             content = m.get("content", "")
             intent = m.get("intent", "")
             confidence = m.get("confidence", "")
             timestamp = m.get("timestamp", "")
             entry = f"- [{timestamp}] ({intent}, conf={confidence}) {content}"
+            lines.append(entry)
+        sections.append("\n".join(lines))
+
+    if received_memories:
+        lines = [
+            "## Context from others (things others said to you — weak signal, "
+            "use only as context for what you were exposed to, NOT as your own views)"
+        ]
+        for m in received_memories:
+            content = m.get("content", "")
+            timestamp = m.get("timestamp", "")
+            meaning = m.get("meaning", "")
+            entry = f"- [{timestamp}] {content}"
+            if meaning:
+                entry += f" (context: {meaning})"
             lines.append(entry)
         sections.append("\n".join(lines))
 
@@ -135,7 +153,9 @@ async def ask_engram(
         {
             "content": m.content,
             "intent": m.intent,
+            "meaning": m.meaning,
             "confidence": m.confidence,
+            "authorship": m.authorship,
             "timestamp": m.timestamp.isoformat() if m.timestamp else None,
         }
         for m in memories
